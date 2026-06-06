@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/approval.granted.v1.schema.json",
+  "title": "approval.granted v1",
+  "description": "EVT-007. The most security-critical event. AUTHORITY-BEARING: producer MUST be gateway (const), emitted only after an authenticated, device-attested human approve; carries the minted Ed25519 token. Drives T5 (MINT). decision excludes reject. Enforces INV-008/INV-014/INV-016/INV-017.",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "approval.granted" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "draft_id": { "type": "string", "minLength": 1 },
+        "decision": { "type": "string", "enum": ["approve", "approve_with_edit"], "description": "reject is NEVER mintable here (X22)." },
+        "approved_draft_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "approval_token": { "type": "string", "minLength": 1, "description": "Ed25519 JWS (compact). jti single-use, exp<=900s, thread+hash bound. VERIFIED, not trusted, by consumers." },
+        "approver_id": { "type": "string", "minLength": 1 },
+        "device_id": { "type": "string", "minLength": 1 },
+        "graph_run_id": { "type": "string", "minLength": 1 },
+        "checkpoint_id": { "type": "string", "minLength": 1 },
+        "edited_text": { "type": "string", "description": "Present iff decision == approve_with_edit." }
+      },
+      "required": ["draft_id", "decision", "approved_draft_hash", "approval_token", "approver_id", "device_id", "graph_run_id", "checkpoint_id"],
+      "allOf": [
+        {
+          "if": { "properties": { "decision": { "const": "approve_with_edit" } } },
+          "then": { "required": ["edited_text"] }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}

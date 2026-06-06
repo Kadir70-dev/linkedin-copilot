@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/envelope.schema.json",
+  "title": "Event Envelope",
+  "description": "Shared envelope for every stream event. Authority: contracts/event-types.yaml#envelope and docs/redis-stream-contracts.md#3.0. Tolerant reader: unknown top-level fields are permitted (forward-compat). Per-event schemas in contracts/events/ $ref this and constrain type/event_version/producer/data and the event-specific required envelope fields.",
+  "type": "object",
+  "$defs": {
+    "ulid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "Crockford base32 ULID (26 chars). Used for event_id, causation_id, jti, transition_trigger."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Canonical content hash, prefixed 'sha256:'. The gateway recomputes any hash it relies on (INV-017)."
+    },
+    "producer": {
+      "type": "string",
+      "enum": ["extension", "gateway", "ai_brain", "pwa"]
+    },
+    "draftState": {
+      "type": "string",
+      "enum": ["RECEIVED", "DRAFTING", "PENDING_APPROVAL", "APPROVED", "READY_FOR_INJECTION", "INJECTED", "SENT_BY_HUMAN", "REJECTED"],
+      "description": "DraftState spine; identical to safety/frozen/state-transitions.json#states.DraftState."
+    },
+    "eventName": {
+      "type": "string",
+      "enum": [
+        "message.received",
+        "thread.updated",
+        "memory.retrieve.requested",
+        "draft.requested",
+        "draft.generated",
+        "approval.requested",
+        "approval.granted",
+        "approval.rejected",
+        "injection.requested",
+        "injection.completed",
+        "human.send.observed",
+        "state.persisted",
+        "retry.requested",
+        "dead_lettered"
+      ],
+      "description": "Closed registry; must equal contracts/event-types.yaml stream_events (CI-EVENT-PARITY / CI-CONTRACT-ENUM)."
+    }
+  },
+  "properties": {
+    "event_id": { "$ref": "#/$defs/ulid" },
+    "type": { "$ref": "#/$defs/eventName" },
+    "event_version": { "type": "integer", "minimum": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "correlation_id": { "type": "string", "minLength": 1 },
+    "causation_id": { "$ref": "#/$defs/ulid" },
+    "thread_id": { "type": "string", "minLength": 1 },
+    "message_id": { "type": "string", "minLength": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "producer": { "$ref": "#/$defs/producer" },
+    "producer_instance": { "type": "string", "minLength": 1 },
+    "data": { "type": "object" }
+  },
+  "required": [
+    "event_id",
+    "type",
+    "event_version",
+    "timestamp",
+    "correlation_id",
+    "producer",
+    "producer_instance",
+    "data"
+  ],
+  "additionalProperties": true
+}

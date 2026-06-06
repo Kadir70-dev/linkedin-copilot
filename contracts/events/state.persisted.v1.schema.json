@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/state.persisted.v1.schema.json",
+  "title": "state.persisted v1",
+  "description": "EVT-012. Fact-after-commit: emitted AFTER the authoritative state write; reflects committed truth. Producer: gateway. Drives NO transition (read-model feed only); using it to drive a transition is forbidden (X35, INV-022). transition_trigger == causation_id.",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "state.persisted" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "draft_id": { "type": "string", "minLength": 1 },
+        "from_state": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/draftState" },
+        "to_state": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/draftState" },
+        "transition_trigger": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/ulid" },
+        "audit_seq": { "type": "integer", "minimum": 0 },
+        "committed_at": { "type": "string", "format": "date-time" },
+        "jti": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/ulid" },
+        "draft_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" }
+      },
+      "required": ["draft_id", "from_state", "to_state", "transition_trigger", "audit_seq", "committed_at"],
+      "additionalProperties": true
+    }
+  }
+}

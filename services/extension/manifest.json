@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Copilot (observe + inject only)",
+  "version": "0.1.0",
+  "description": "Captures a LinkedIn thread, gets an AI draft via the local gateway, injects it into the composer on approval. NEVER sends. The human is the only sender.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://localhost:8080/*",
+    "https://www.linkedin.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

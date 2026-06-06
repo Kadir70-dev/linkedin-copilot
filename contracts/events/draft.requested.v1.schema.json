@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/draft.requested.v1.schema.json",
+  "title": "draft.requested v1",
+  "description": "EVT-004. Gateway dispatches a received message to cognition. Producer: gateway. Drives T2 (RECEIVED->DRAFTING downstream). thread_context_ref is a READ-only handle (INV-002/INV-010).",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "draft.requested" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "trigger_message_id": { "type": "string", "minLength": 1 },
+        "thread_context_ref": { "type": "string", "minLength": 1 },
+        "idempotency_scope": { "type": "string", "minLength": 1, "description": "= message_id; one in-flight draft per inbound." },
+        "graph_run_id": { "type": "string", "minLength": 1 },
+        "style_hints": { "type": "object", "additionalProperties": true },
+        "prior_draft_id": { "type": "string" }
+      },
+      "required": ["trigger_message_id", "thread_context_ref", "idempotency_scope", "graph_run_id"],
+      "additionalProperties": true
+    }
+  }
+}

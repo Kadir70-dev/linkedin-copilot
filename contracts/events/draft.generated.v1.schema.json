@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/draft.generated.v1.schema.json",
+  "title": "draft.generated v1",
+  "description": "EVT-005. Cognition completed; graph suspended at APPROVAL_GATE. Producer: ai_brain. Drives T3. data.draft is a DraftArtifact — DATA ONLY, never a command (INV-002/INV-006). The gateway RECOMPUTES draft_hash and rejects on mismatch.",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "draft.generated" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "ai_brain" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "draftArtifact": {
+      "type": "object",
+      "description": "DATA ONLY. No command/effect/token field is permitted; additionalProperties are tolerated but ignored by the gateway (INV-002).",
+      "properties": {
+        "text": { "type": "string" },
+        "structured_fields": { "type": "object", "additionalProperties": true },
+        "slot_choices": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["text"],
+      "additionalProperties": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "draft_id": { "type": "string", "minLength": 1 },
+        "graph_run_id": { "type": "string", "minLength": 1 },
+        "checkpoint_id": { "type": "string", "minLength": 1 },
+        "draft": { "$ref": "#/$defs/draftArtifact" },
+        "draft_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "model_meta": { "type": "object", "additionalProperties": true },
+        "meeting_intent": {
+          "type": "object",
+          "properties": {
+            "detected": { "type": "boolean" },
+            "slots": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["detected"],
+          "additionalProperties": true
+        }
+      },
+      "required": ["draft_id", "graph_run_id", "checkpoint_id", "draft", "draft_hash", "model_meta"],
+      "additionalProperties": true
+    }
+  }
+}

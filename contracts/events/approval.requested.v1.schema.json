@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/approval.requested.v1.schema.json",
+  "title": "approval.requested v1",
+  "description": "EVT-006. Gateway solicits a human decision. Producer: gateway. Drives NO transition (solicits the human). Carries display copy only; nothing that can actuate. expires_at is the decision-request TTL (distinct from token exp).",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "approval.requested" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "draft_id": { "type": "string", "minLength": 1 },
+        "draft": {
+          "type": "object",
+          "properties": { "text": { "type": "string" } },
+          "required": ["text"],
+          "additionalProperties": true
+        },
+        "draft_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "graph_run_id": { "type": "string", "minLength": 1 },
+        "checkpoint_id": { "type": "string", "minLength": 1 },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "thread_summary": { "type": "string" },
+        "meeting_slots": { "type": "array", "items": { "type": "string" } },
+        "edit_allowed": { "type": "boolean" }
+      },
+      "required": ["draft_id", "draft", "draft_hash", "graph_run_id", "checkpoint_id", "expires_at", "thread_summary"],
+      "additionalProperties": true
+    }
+  }
+}

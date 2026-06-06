@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/injection.requested.v1.schema.json",
+  "title": "injection.requested v1",
+  "description": "EVT-009. AUTHORITY-BEARING: producer MUST be gateway (const), issued ONLY after the token jti is atomically consumed (consume strictly precedes command emission). Drives T6. Carries the consumed_jti + a gateway-signed command + bundle-hash pin. Enforces INV-001/INV-016. Injection is NOT sending.",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "injection.requested" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "draft_id": { "type": "string", "minLength": 1 },
+        "inject_text": { "type": "string" },
+        "inject_text_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "consumed_jti": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/ulid" },
+        "inject_command_sig": { "type": "string", "minLength": 1, "description": "Gateway Ed25519 signature over the inject command; the extension verifies before injecting." },
+        "target_thread_id": { "type": "string", "minLength": 1 },
+        "bundle_hash_expected": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "slot_ics_ref": { "type": "string" }
+      },
+      "required": ["draft_id", "inject_text", "inject_text_hash", "consumed_jti", "inject_command_sig", "target_thread_id", "bundle_hash_expected"],
+      "additionalProperties": true
+    }
+  }
+}

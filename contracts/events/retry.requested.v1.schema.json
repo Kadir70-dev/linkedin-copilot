@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/retry.requested.v1.schema.json",
+  "title": "retry.requested v1",
+  "description": "EVT-013. Re-enqueues a transiently-failed event with backoff. Producer: gateway. Drives NO transition. Re-issues the original effect IDEMPOTENTLY; never re-mints/re-consumes; safety-class errors are NOT retried (go to DLQ). Enforces INV-018.",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "retry.requested" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "original_event_id": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/ulid" },
+        "original_stream": { "type": "string", "minLength": 1 },
+        "original_type": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/eventName" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "next_attempt_at": { "type": "string", "format": "date-time" },
+        "last_error": {
+          "type": "object",
+          "properties": {
+            "code": { "type": "string", "minLength": 1 },
+            "message_digest": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" }
+          },
+          "required": ["code", "message_digest"],
+          "additionalProperties": true
+        },
+        "backoff_ms": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["original_event_id", "original_stream", "original_type", "attempt", "max_attempts", "next_attempt_at", "last_error"],
+      "additionalProperties": true
+    }
+  }
+}

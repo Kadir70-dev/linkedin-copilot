@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/memory.retrieve.requested.v1.schema.json",
+  "title": "memory.retrieve.requested v1",
+  "description": "EVT-003. Audit-only provenance of a read-only memory query. Producer: ai_brain. Drives NO transition; the gateway records it but does not act. query_digest is a HASH, never raw query text (INV-020/INV-004).",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "memory.retrieve.requested" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "ai_brain" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "query_kind": {
+          "type": "string",
+          "enum": ["thread_history", "contact_profile", "semantic"]
+        },
+        "query_digest": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "top_k": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "filters": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["query_kind", "query_digest", "top_k"],
+      "additionalProperties": true
+    }
+  }
+}

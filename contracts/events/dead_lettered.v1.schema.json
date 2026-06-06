@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/dead_lettered.v1.schema.json",
+  "title": "dead_lettered v1",
+  "description": "EVT-014. Wraps an event that exhausted retries / failed schema / was unknown-type / poison. Producer: gateway. Drives NO transition. MOVE-THEN-ACK. failure_class in {safety_violation,signature_invalid} is alarm-worthy and NEVER auto-recovered. original_envelope is verbatim and may itself be malformed, so it is an unconstrained object (INV-020).",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "dead_lettered" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "original_envelope": { "type": "object", "additionalProperties": true, "description": "Verbatim failed event (may be malformed); intentionally unconstrained." },
+        "failure_class": {
+          "type": "string",
+          "enum": ["schema_invalid", "unknown_type", "max_retries_exceeded", "poison", "safety_violation", "signature_invalid"]
+        },
+        "failure_detail": { "type": "string" },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "first_seen_at": { "type": "string", "format": "date-time" },
+        "dead_lettered_at": { "type": "string", "format": "date-time" },
+        "source_stream": { "type": "string", "minLength": 1 },
+        "source_group": { "type": "string", "minLength": 1 },
+        "quarantine_ref": { "type": "string" }
+      },
+      "required": ["original_envelope", "failure_class", "failure_detail", "attempts", "first_seen_at", "dead_lettered_at", "source_stream", "source_group"],
+      "additionalProperties": true
+    }
+  }
+}

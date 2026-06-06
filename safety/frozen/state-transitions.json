@@ -1,0 +1,443 @@
+{
+  "fixture_id": "STATE-TRANSITIONS-FROZEN-001",
+  "status": "AUTHORITATIVE",
+  "description": "Single source of truth for all canonical states, allowed/forbidden transitions, the guard pipeline, runtime assertions, and invariant mappings for the LinkedIn Copilot control plane. The Go FSM, LangGraph orchestration, Redis stream contracts, runtime invariant engine, and CI safety gates all derive from THIS file. Hand edits require an ADR + security sign-off + a recomputed integrity digest in the same PR.",
+  "schema": {
+    "schema_version": "1.0.0",
+    "schema_semantics": "semver; MAJOR bump = breaking structure change (consumers must update parsers), MINOR = additive field, PATCH = clarification only",
+    "derived_authority": [
+      "docs/safety-invariant.md#SAFETY-INVARIANT-001",
+      "docs/redis-stream-contracts.md#REDIS-STREAM-CONTRACTS-001",
+      "docs/go-state-machine.md#GO-STATE-MACHINE-001"
+    ],
+    "conflict_resolution": "On any conflict, docs/safety-invariant.md wins, then docs/go-state-machine.md, then docs/redis-stream-contracts.md. This fixture MUST never contradict them; it is their machine-readable projection, not a new design."
+  },
+  "version": {
+    "fixture_version": 1,
+    "fixture_version_semantics": "monotonically increasing integer; every change increments it; boot asserts the running code's embedded version equals this",
+    "frozen": true,
+    "change_control": "ADR in docs/adr/ + security sign-off + recomputed integrity digest, all in the same PR. Weakening a guard or admitting a forbidden transition without removing its CI gate is a build-breaking offense."
+  },
+  "integrity": {
+    "algorithm": "SHA-256",
+    "scope": "the entire byte content of safety/frozen/state-transitions.json as committed (LF newlines, no trailing whitespace, terminal newline)",
+    "self_reference_note": "The digest is NOT stored inside this JSON to avoid a self-referential hash. It is stored in the sidecar safety/frozen/state-transitions.sha256 and pinned in the Go gateway boot fixture and docs/state-transition-fixture.md. Verification: recompute sha256 over this file and compare to the sidecar (CI-FIXTURE-INTEGRITY).",
+    "sidecar": "safety/frozen/state-transitions.sha256",
+    "boot_assertion": "R9 — the in-code transition table hash equals this file's digest; mismatch => gateway refuses to boot (fail-closed)."
+  },
+  "migration": {
+    "strategy": "expand/contract, mirroring docs/redis-stream-contracts.md#2.3",
+    "rules": [
+      "Additive change (new optional field, new state with no inbound/outbound allowed transition yet, new derived facet): MINOR schema bump, fixture_version++ , no consumer break.",
+      "Breaking change (rename/remove a state, change a transition's guards/authority, alter a forbidden entry): MAJOR schema bump, fixture_version++, all consumers must dual-read old+new for one migration window before the old is retired.",
+      "Historical audit records reference the fixture_version under which they were produced; the forensic verifier maps versions via docs/adr/ migration notes.",
+      "No in-place rewrite of a prior frozen fixture; supersede with a new version and keep the old for forensic replay."
+    ],
+    "compatibility_matrix_location": "docs/adr/ (one ADR per fixture_version bump)"
+  },
+  "states": {
+    "DraftState": {
+      "role": "THE SPINE — frozen, identical to docs/safety-invariant.md#2 and docs/go-state-machine.md#2.1. The single authoritative lifecycle. Only the gateway transition function writes it (INV-022).",
+      "writer": "gateway.statemachine.Apply (sole writer)",
+      "values": [
+        { "name": "RECEIVED", "kind": "initial", "meaning": "Inbound message ingested; no work started." },
+        { "name": "DRAFTING", "kind": "transient", "meaning": "Dispatched to cognition; graph running; suspends at APPROVAL_GATE." },
+        { "name": "PENDING_APPROVAL", "kind": "waiting_human", "meaning": "DraftArtifact exists; awaiting human decision." },
+        { "name": "APPROVED", "kind": "transient", "meaning": "Human approved; single-use draft-hash-bound Ed25519 token MINTED." },
+        { "name": "READY_FOR_INJECTION", "kind": "transient", "meaning": "Token jti atomically CONSUMED; injection command issued." },
+        { "name": "INJECTED", "kind": "waiting_human", "meaning": "Extension confirmed approved text is in composer. NOT sent." },
+        { "name": "SENT_BY_HUMAN", "kind": "terminal", "meaning": "Extension OBSERVED a human-initiated send. Reachable only from INJECTED (INV-021)." },
+        { "name": "REJECTED", "kind": "terminal", "meaning": "Human rejected; no token was ever minted." }
+      ],
+      "initial": "RECEIVED",
+      "terminals": ["SENT_BY_HUMAN", "REJECTED"]
+    },
+    "ThreadState": {
+      "role": "Coarse projection of a conversation over many drafts. DERIVED; never drives a draft transition (X35).",
+      "writer": "gateway.statemachine.projection (read-model only)",
+      "values": [
+        { "name": "IDLE", "kind": "rest", "meaning": "Known thread, no in-flight work." },
+        { "name": "INBOUND_PENDING", "kind": "transient", "meaning": "Inbound ingested, draft not started." },
+        { "name": "DRAFT_IN_FLIGHT", "kind": "active", "meaning": "A draft is in DRAFTING/PENDING_APPROVAL/APPROVED/READY_FOR_INJECTION." },
+        { "name": "AWAITING_HUMAN", "kind": "waiting_human", "meaning": "A draft is INJECTED; waiting for the human to send." },
+        { "name": "RESOLVED", "kind": "transient", "meaning": "Active draft reached SENT_BY_HUMAN." },
+        { "name": "CLOSED", "kind": "terminal", "meaning": "Administratively closed/archived. Reopen creates a new thread epoch." }
+      ],
+      "initial": "IDLE",
+      "terminals": ["CLOSED"]
+    },
+    "ApprovalState": {
+      "role": "Facet of the PENDING_APPROVAL -> APPROVED/REJECTED region. Guard-bearing; cannot contradict DraftState.",
+      "writer": "gateway.statemachine.facets.approval",
+      "values": [
+        { "name": "NONE", "kind": "initial", "meaning": "No approval solicited." },
+        { "name": "REQUESTED", "kind": "waiting_human", "meaning": "approval.requested emitted; awaiting decision." },
+        { "name": "GRANTED", "kind": "transient", "meaning": "Authenticated human approve; token minted + bound." },
+        { "name": "CONSUMED", "kind": "transient", "meaning": "Token jti atomically consumed (drives injection)." },
+        { "name": "REJECTED", "kind": "terminal", "meaning": "Authenticated human reject; NO token." },
+        { "name": "EXPIRED", "kind": "recoverable", "meaning": "approval.requested TTL elapsed with no decision; re-solicit allowed." },
+        { "name": "INVALIDATED", "kind": "recoverable", "meaning": "Minted/consumed token invalidated (draft edited -> hash mismatch); re-solicit on new content." }
+      ],
+      "initial": "NONE",
+      "terminals": ["REJECTED"]
+    },
+    "InjectionState": {
+      "role": "Facet of APPROVED -> READY_FOR_INJECTION -> INJECTED. Injection is NOT sending.",
+      "writer": "gateway.statemachine.facets.injection",
+      "values": [
+        { "name": "NONE", "kind": "initial", "meaning": "No injection commanded." },
+        { "name": "COMMANDED", "kind": "transient", "meaning": "injection.requested issued (after jti consume), references consumed token." },
+        { "name": "CONFIRMED", "kind": "transient", "meaning": "injection.completed{injected} with matching composer hash." },
+        { "name": "REFUSED", "kind": "error", "meaning": "Extension refused (bad sig / missing jti / bundle-hash mismatch). Never advances DraftState." },
+        { "name": "FAILED", "kind": "terminal", "meaning": "DOM error/timeout exhausted retries. Draft abandoned; needs re-approval." }
+      ],
+      "initial": "NONE",
+      "terminals": ["FAILED"]
+    },
+    "ObservedSendState": {
+      "role": "Facet of INJECTED -> SENT_BY_HUMAN. PASSIVE — never set by software initiative (INV-013, INV-021).",
+      "writer": "gateway.statemachine.facets.observed_send",
+      "values": [
+        { "name": "NONE", "kind": "initial", "meaning": "No send observed." },
+        { "name": "OBSERVED", "kind": "terminal", "meaning": "human.send.observed whose observed_text_hash == approved draft_hash." },
+        { "name": "DIVERGED", "kind": "terminal", "meaning": "Human send observed but text differs from approved draft (human retyped). Still a human send." }
+      ],
+      "initial": "NONE",
+      "terminals": ["OBSERVED", "DIVERGED"]
+    }
+  },
+  "authorities": {
+    "description": "Who is permitted to ORIGINATE each event. A stream message is a CLAIM; only the gateway adjudicates it (Control-Plane Principle). authority on a transition names the role whose authenticated action the gateway requires.",
+    "roles": {
+      "extension": "Captures DOM, injects text, observes sends. Produces claims only.",
+      "ai_brain": "Cognition only. Produces DraftArtifact data only. Holds public key only; cannot mint (INV-008).",
+      "pwa": "Displays drafts, captures human decision. Cannot inject/mint.",
+      "human": "The only sender. Originates approve/reject decisions and the physical Send click.",
+      "gateway": "Single system authority. Sole writer of DraftState, sole token minter (INV-008/014), sole emitter of authority-bearing events (approval.granted, injection.requested).",
+      "reconciler": "Gateway-internal; re-drives stale *.requested via retry/DLQ. Cannot mint or advance toward send.",
+      "retry_worker": "Gateway-internal; re-delivers idempotently."
+    },
+    "rule_producer_gateway_for_authority_events": "approval.granted and injection.requested MUST carry producer==gateway; any other producer => SAFETY_VIOLATION + dead_letter (defense against a client forging authority)."
+  },
+  "events": {
+    "description": "Closed registry, identical to docs/redis-stream-contracts.md#2.2. Unknown type => dead_letter, never acted on.",
+    "registry": [
+      { "type": "message.received", "stream": "stream:message_ingest", "producer": "extension", "drives_transition": ["T1"] },
+      { "type": "thread.updated", "stream": "stream:message_ingest", "producer": "extension", "drives_transition": ["T9"] },
+      { "type": "memory.retrieve.requested", "stream": "stream:cognition_request", "producer": "ai_brain", "drives_transition": [] },
+      { "type": "draft.requested", "stream": "stream:cognition_request", "producer": "gateway", "drives_transition": ["T2"] },
+      { "type": "draft.generated", "stream": "stream:cognition_result", "producer": "ai_brain", "drives_transition": ["T3"] },
+      { "type": "approval.requested", "stream": "stream:approval", "producer": "gateway", "drives_transition": [] },
+      { "type": "approval.granted", "stream": "stream:approval", "producer": "gateway", "drives_transition": ["T5"] },
+      { "type": "approval.rejected", "stream": "stream:approval", "producer": "gateway", "drives_transition": ["T4"] },
+      { "type": "injection.requested", "stream": "stream:injection", "producer": "gateway", "drives_transition": ["T6"] },
+      { "type": "injection.completed", "stream": "stream:injection", "producer": "extension", "drives_transition": ["T7"] },
+      { "type": "human.send.observed", "stream": "stream:observed_send", "producer": "extension", "drives_transition": ["T8"] },
+      { "type": "state.persisted", "stream": "stream:persistence", "producer": "gateway", "drives_transition": [] },
+      { "type": "retry.requested", "stream": "stream:retry", "producer": "gateway", "drives_transition": [] },
+      { "type": "dead_lettered", "stream": "stream:dead_letter", "producer": "gateway", "drives_transition": [] }
+    ]
+  },
+  "guard_pipeline": {
+    "description": "Deterministic, ordered guard execution. EVERY transition runs guards in ascending order index. A guard with failure_class=reject stops the transition and audits a rejection; failure_class=safety_violation additionally alarms. crypto guards (order 7-15) apply only to token-bearing transitions (applies_when). The order is FROZEN: crypto must follow legality must follow dedupe/order (docs/go-state-machine.md#4.3).",
+    "guards": [
+      { "order": 1, "id": "schema_valid", "stage": "SCHEMA", "applies_when": "always", "failure_class": "dead_letter", "description": "Event validates against contracts/events/<type>.vN.", "invariant": ["INV-018"] },
+      { "order": 2, "id": "actor_authorized", "stage": "AUTHORITY", "applies_when": "always", "failure_class": "safety_violation", "description": "Producer role permitted for this event type; approval.granted/injection.requested require producer==gateway.", "invariant": ["INV-014", "INV-008"] },
+      { "order": 3, "id": "replay_check", "stage": "DEDUPE", "applies_when": "always", "failure_class": "reject", "description": "event_id unseen in seen-set:<group>:<event_id>; duplicate => XACK + no effect.", "invariant": ["INV-018"] },
+      { "order": 4, "id": "sequence_valid", "stage": "DEDUPE", "applies_when": "thread_scoped", "failure_class": "reject", "description": "seq > applied_seq for the thread; seq <= applied_seq => stale duplicate, no effect.", "invariant": ["INV-018"] },
+      { "order": 5, "id": "order_in_sequence", "stage": "ORDER", "applies_when": "thread_scoped", "failure_class": "park", "description": "seq == applied+1 applies then drains successors; seq > applied+1 parked in reorder buffer (NOT acked); gap past REORDER_TIMEOUT => retry.requested + alarm.", "invariant": ["INV-018"] },
+      { "order": 6, "id": "legality_in_table", "stage": "LEGALITY", "applies_when": "always", "failure_class": "safety_violation", "description": "(source_state, event) MUST be in allowed_transitions; default-deny everything else (forbidden set X1-X36).", "invariant": ["INV-022"] },
+      { "order": 7, "id": "token_signature_valid", "stage": "CRYPTO", "applies_when": "token_bearing", "failure_class": "safety_violation", "description": "Ed25519 verify over header.payload with gateway PUBLIC key; kid selects rotation-aware key.", "invariant": ["INV-008"] },
+      { "order": 8, "id": "issuer_type_valid", "stage": "CRYPTO", "applies_when": "token_bearing", "failure_class": "safety_violation", "description": "iss==gateway, typ==approval+jwt, purpose==resume_and_inject (never 'send').", "invariant": ["INV-008"] },
+      { "order": 9, "id": "token_not_expired", "stage": "CRYPTO", "applies_when": "token_bearing", "failure_class": "reject", "description": "now in [iat, exp] and exp-iat <= 900s.", "invariant": ["INV-016"] },
+      { "order": 10, "id": "thread_match", "stage": "CRYPTO", "applies_when": "token_bearing", "failure_class": "safety_violation", "description": "token.thread_id == target thread.", "invariant": ["INV-017"] },
+      { "order": 11, "id": "draft_hash_match", "stage": "CRYPTO", "applies_when": "token_bearing", "failure_class": "safety_violation", "description": "token.draft_hash == gateway-STORED hash (recomputed at T3/T5; never trust wire hash).", "invariant": ["INV-017"] },
+      { "order": 12, "id": "decision_typed", "stage": "CRYPTO", "applies_when": "mint", "failure_class": "safety_violation", "description": "decision in {approve, approve_with_edit}; reject is never mintable.", "invariant": ["INV-014"] },
+      { "order": 13, "id": "human_decision_authenticated", "stage": "CRYPTO", "applies_when": "mint", "failure_class": "safety_violation", "description": "Decision originated from an authenticated, device-attested human action; no mint reachable from an AI-originated event.", "invariant": ["INV-014", "INV-019"] },
+      { "order": 14, "id": "run_bound", "stage": "CRYPTO", "applies_when": "token_bearing", "failure_class": "reject", "description": "graph_run_id/checkpoint_id match the suspended run (resume hits the intended checkpoint).", "invariant": ["INV-007"] },
+      { "order": 15, "id": "jti_consume_atomic", "stage": "CRYPTO", "applies_when": "consume", "failure_class": "safety_violation", "description": "Lua CAS: if GET jti==unconsumed then SET jti consumed. Already-consumed/absent => replay => reject + SAFETY_VIOLATION.", "invariant": ["INV-016"] },
+      { "order": 16, "id": "effect_apply", "stage": "EFFECT", "applies_when": "always", "failure_class": "reject", "description": "Apply transition, mint/consume token if specified, write DraftState (THE ONLY writer).", "invariant": ["INV-022"] },
+      { "order": 17, "id": "audit_append", "stage": "AUDIT", "applies_when": "always", "failure_class": "reject", "description": "Append hash-chained audit record (prev_hash linkage) BEFORE XACK.", "invariant": ["INV-020"] },
+      { "order": 18, "id": "emit_downstream", "stage": "EMIT", "applies_when": "always", "failure_class": "retry", "description": "Emit downstream event + state.persisted after durable commit.", "invariant": ["INV-020"] },
+      { "order": 19, "id": "xack_source", "stage": "ACK", "applies_when": "always", "failure_class": "retry", "description": "XACK the source entry (move-then-ack everywhere).", "invariant": ["INV-018"] }
+    ],
+    "stage_order": ["SCHEMA", "AUTHORITY", "DEDUPE", "ORDER", "LEGALITY", "CRYPTO", "EFFECT", "AUDIT", "EMIT", "ACK"]
+  },
+  "allowed_transitions": [
+    {
+      "transition_id": "T1",
+      "machine": "DraftState",
+      "source_state": "NONE",
+      "target_state": "RECEIVED",
+      "triggering_event": "message.received",
+      "authority": "extension_claim_gateway_adjudicates",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "legality_in_table", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R7", "R8", "R16", "R17"],
+      "invariant_dependencies": ["INV-018", "INV-020"],
+      "facet_effects": { "ThreadState": "IDLE->INBOUND_PENDING" },
+      "side_effects": ["assign per-thread seq", "create thread if unknown", "dedupe thread_id+message_id"],
+      "retry_policy": { "retryable": false, "rationale": "ingest is idempotent on thread_id+message_id; duplicates are deduped not retried" },
+      "failure_behavior": "reject_and_audit; unknown thread is created, not failed"
+    },
+    {
+      "transition_id": "T2",
+      "machine": "DraftState",
+      "source_state": "RECEIVED",
+      "target_state": "DRAFTING",
+      "triggering_event": "draft.requested",
+      "authority": "gateway",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R7", "R8", "R11", "R16"],
+      "invariant_dependencies": ["INV-002", "INV-010"],
+      "facet_effects": { "ThreadState": "INBOUND_PENDING->DRAFT_IN_FLIGHT" },
+      "side_effects": ["one in-flight draft per inbound (idempotency_scope)", "dispatch graph_run_id"],
+      "retry_policy": { "retryable": true, "max_attempts": 5, "backoff": "exp_jitter base=250ms cap=30s", "idempotency_key": "idempotency_scope(message_id)" },
+      "failure_behavior": "stay_in_RECEIVED; reconciler re-drives draft.requested; exhaustion=>DLQ"
+    },
+    {
+      "transition_id": "T3",
+      "machine": "DraftState",
+      "source_state": "DRAFTING",
+      "target_state": "PENDING_APPROVAL",
+      "triggering_event": "draft.generated",
+      "authority": "ai_brain_claim_gateway_adjudicates",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R7", "R8", "R11", "R16"],
+      "invariant_dependencies": ["INV-002", "INV-006"],
+      "facet_effects": { "ApprovalState": "NONE->REQUESTED" },
+      "side_effects": ["validate output as DraftArtifact (data only)", "RECOMPUTE and store draft_hash", "verify graph_run_id/checkpoint_id match dispatched run", "emit approval.requested"],
+      "retry_policy": { "retryable": true, "max_attempts": 5, "backoff": "exp_jitter base=250ms cap=30s", "idempotency_key": "graph_run_id+draft_id" },
+      "failure_behavior": "schema-invalid output=>DLQ(schema_invalid), stay_in_DRAFTING; cognition timeout=>reconciler retry; NEVER auto-advance"
+    },
+    {
+      "transition_id": "T4",
+      "machine": "DraftState",
+      "source_state": "PENDING_APPROVAL",
+      "target_state": "REJECTED",
+      "triggering_event": "approval.rejected",
+      "authority": "gateway_on_authenticated_human_reject",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R7", "R8", "R18"],
+      "invariant_dependencies": ["INV-019"],
+      "facet_effects": { "ApprovalState": "REQUESTED->REJECTED", "ThreadState": "DRAFT_IN_FLIGHT->IDLE" },
+      "side_effects": ["NO token minted", "optional request_redraft => fresh draft.requested under same correlation_id"],
+      "retry_policy": { "retryable": false, "rationale": "terminal human decision" },
+      "failure_behavior": "terminal; idempotent on draft_id"
+    },
+    {
+      "transition_id": "T5",
+      "machine": "DraftState",
+      "source_state": "PENDING_APPROVAL",
+      "target_state": "APPROVED",
+      "triggering_event": "approval.granted",
+      "authority": "gateway_on_authenticated_human_approve_MINTS_TOKEN",
+      "token_role": "mint",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "decision_typed", "human_decision_authenticated", "draft_hash_match", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R1", "R3", "R7", "R8", "R10", "R13", "R14", "R15", "R19"],
+      "invariant_dependencies": ["INV-008", "INV-014", "INV-016", "INV-017"],
+      "facet_effects": { "ApprovalState": "REQUESTED->GRANTED" },
+      "side_effects": ["compute draft_hash over (possibly edited) approved content", "MINT Ed25519 token (jti, exp<=900s, thread_id+draft_hash bound)", "store jti=unconsumed TTL=exp", "audit TOKEN_MINTED"],
+      "retry_policy": { "retryable": false, "rationale": "mint is a one-shot effect of a human decision; duplicate granted deduped by event_id and single-use jti" },
+      "failure_behavior": "non-gateway producer OR non-human-authenticated OR decision==reject => SAFETY_VIOLATION + dead_letter; stay_in_PENDING_APPROVAL"
+    },
+    {
+      "transition_id": "T6",
+      "machine": "DraftState",
+      "source_state": "APPROVED",
+      "target_state": "READY_FOR_INJECTION",
+      "triggering_event": "injection.requested",
+      "authority": "gateway_CONSUMES_TOKEN",
+      "token_role": "consume",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "token_signature_valid", "issuer_type_valid", "token_not_expired", "thread_match", "draft_hash_match", "run_bound", "jti_consume_atomic", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R1", "R4", "R5", "R7", "R8", "R14", "R15", "R20"],
+      "invariant_dependencies": ["INV-001", "INV-016"],
+      "facet_effects": { "ApprovalState": "GRANTED->CONSUMED", "InjectionState": "NONE->COMMANDED" },
+      "side_effects": ["ATOMIC jti consume (Lua CAS)", "emit gateway-signed injection.requested referencing consumed_jti", "audit TOKEN_CONSUMED"],
+      "retry_policy": { "retryable": true, "max_attempts": 5, "backoff": "exp_jitter base=250ms cap=30s", "idempotency_key": "draft_id+consumed_jti", "note": "retry re-issues the COMMAND idempotently; never re-mints, never re-consumes" },
+      "failure_behavior": "already-consumed/expired/forged token => reject + SAFETY_VIOLATION; consume strictly precedes command emission"
+    },
+    {
+      "transition_id": "T7",
+      "machine": "DraftState",
+      "source_state": "READY_FOR_INJECTION",
+      "target_state": "INJECTED",
+      "triggering_event": "injection.completed",
+      "authority": "extension_claim_gateway_adjudicates",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "draft_hash_match", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R7", "R8", "R21"],
+      "invariant_dependencies": ["INV-013", "INV-017"],
+      "facet_effects": { "InjectionState": "COMMANDED->CONFIRMED" },
+      "side_effects": ["assert composer_text_hash==draft_hash else SAFETY_VIOLATION", "verify consumed_jti reference"],
+      "retry_policy": { "retryable": true, "max_attempts": 5, "backoff": "exp_jitter base=250ms cap=30s", "idempotency_key": "draft_id+consumed_jti" },
+      "failure_behavior": "result=refused => InjectionState REFUSED, NO advance, alarm; result=dom_error => retry; hash mismatch => SAFETY_VIOLATION; exhaustion => InjectionState FAILED + DLQ"
+    },
+    {
+      "transition_id": "T8",
+      "machine": "DraftState",
+      "source_state": "INJECTED",
+      "target_state": "SENT_BY_HUMAN",
+      "triggering_event": "human.send.observed",
+      "authority": "extension_observation_gateway_adjudicates",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R2", "R3", "R7", "R8", "R18"],
+      "invariant_dependencies": ["INV-013", "INV-021"],
+      "facet_effects": { "ObservedSendState": "NONE->OBSERVED|DIVERGED", "ThreadState": "AWAITING_HUMAN->RESOLVED" },
+      "side_effects": ["source MUST be INJECTED (INV-021)", "record observed_text_hash", "flag content_diverged if != draft_hash", "audit OBSERVED_SEND"],
+      "retry_policy": { "retryable": false, "rationale": "passive observation; idempotent on observed_outbound_message_id" },
+      "failure_behavior": "source != INJECTED => recorded as independent human send (audit), NOT a state advance of this draft"
+    },
+    {
+      "transition_id": "T9",
+      "machine": "DraftState",
+      "source_state": "INJECTED",
+      "target_state": "PENDING_APPROVAL",
+      "triggering_event": "thread.updated",
+      "authority": "gateway",
+      "required_guards": ["schema_valid", "actor_authorized", "replay_check", "sequence_valid", "order_in_sequence", "legality_in_table", "draft_hash_match", "effect_apply", "audit_append", "emit_downstream", "xack_source"],
+      "required_runtime_assertions": ["R7", "R8", "R22"],
+      "invariant_dependencies": ["INV-017"],
+      "facet_effects": { "ApprovalState": "CONSUMED->INVALIDATED then INVALIDATED->REQUESTED" },
+      "side_effects": ["triggered only when change_kind=composer_changed AND hash != stored draft_hash", "INVALIDATE token", "re-solicit approval on new content"],
+      "retry_policy": { "retryable": false, "rationale": "edit detection is idempotent on the new composer hash" },
+      "failure_behavior": "hash unchanged => no-op; hash changed => return to PENDING_APPROVAL and invalidate token"
+    }
+  ],
+  "facet_transitions": {
+    "description": "Derived sub-machine transitions that co-occur with spine transitions above. Listed for completeness; they are advanced by the same gateway transition function and never independently of the spine.",
+    "ApprovalState": [
+      { "id": "F1", "from": "NONE", "to": "REQUESTED", "co_occurs_with": "T3" },
+      { "id": "F2", "from": "REQUESTED", "to": "GRANTED", "co_occurs_with": "T5" },
+      { "id": "F3", "from": "REQUESTED", "to": "REJECTED", "co_occurs_with": "T4" },
+      { "id": "F4", "from": "REQUESTED", "to": "EXPIRED", "co_occurs_with": "request_ttl_reconciler", "note": "DraftState unchanged; re-solicit allowed" },
+      { "id": "F5", "from": "GRANTED", "to": "CONSUMED", "co_occurs_with": "T6" },
+      { "id": "F6", "from": "CONSUMED", "to": "INVALIDATED", "co_occurs_with": "T9" },
+      { "id": "F6b", "from": "GRANTED", "to": "INVALIDATED", "co_occurs_with": "post_approval_edit_before_inject" }
+    ],
+    "InjectionState": [
+      { "id": "F7", "from": "NONE", "to": "COMMANDED", "co_occurs_with": "T6" },
+      { "id": "F8", "from": "COMMANDED", "to": "CONFIRMED", "co_occurs_with": "T7" },
+      { "id": "F9", "from": "COMMANDED", "to": "REFUSED", "co_occurs_with": "injection.completed{refused}", "note": "no DraftState advance; alarm" },
+      { "id": "F10", "from": "COMMANDED", "to": "FAILED", "co_occurs_with": "retry_exhaustion", "note": "DLQ; draft abandoned" }
+    ],
+    "ObservedSendState": [
+      { "id": "F11", "from": "NONE", "to": "OBSERVED", "co_occurs_with": "T8", "when": "hash match" },
+      { "id": "F12", "from": "NONE", "to": "DIVERGED", "co_occurs_with": "T8", "when": "hash mismatch" }
+    ],
+    "ThreadState": [
+      { "id": "F13", "chain": "IDLE->INBOUND_PENDING->DRAFT_IN_FLIGHT->AWAITING_HUMAN->RESOLVED->IDLE|CLOSED", "note": "derived projection only (X35)" }
+    ]
+  },
+  "forbidden_transitions": [
+    { "id": "X1", "source_state": "RECEIVED", "target_state": "SENT_BY_HUMAN", "reason": "skips drafting + approval entirely", "enforcement_layer": ["legality_in_table", "default_deny"], "violated_invariant": ["INV-001", "INV-019"], "test_mapping": ["forbidden_table_test/X1", "SAFE-NEG-005"] },
+    { "id": "X2", "source_state": "RECEIVED", "target_state": "APPROVED", "reason": "no draft, no human decision", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-014"], "test_mapping": ["forbidden_table_test/X2"] },
+    { "id": "X3", "source_state": "RECEIVED", "target_state": "INJECTED", "reason": "no draft, no token", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-001"], "test_mapping": ["forbidden_table_test/X3"] },
+    { "id": "X4", "source_state": "DRAFTING", "target_state": "APPROVED", "reason": "AI cannot self-approve", "enforcement_layer": ["actor_authorized", "legality_in_table"], "violated_invariant": ["INV-014"], "test_mapping": ["forbidden_table_test/X4", "SAFE-NEG-001"] },
+    { "id": "X5", "source_state": "DRAFTING", "target_state": "SENT_BY_HUMAN", "reason": "no approval, no human send", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-001"], "test_mapping": ["forbidden_table_test/X5"] },
+    { "id": "X6", "source_state": "DRAFTING", "target_state": "INJECTED", "reason": "injection without token", "enforcement_layer": ["jti_consume_atomic", "legality_in_table"], "violated_invariant": ["INV-001"], "test_mapping": ["forbidden_table_test/X6"] },
+    { "id": "X7", "source_state": "DRAFTING", "target_state": "READY_FOR_INJECTION", "reason": "bypasses approval + consume", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-001"], "test_mapping": ["forbidden_table_test/X7"] },
+    { "id": "X8", "source_state": "PENDING_APPROVAL", "target_state": "INJECTED", "reason": "injection without a consumed token", "enforcement_layer": ["jti_consume_atomic", "legality_in_table"], "violated_invariant": ["INV-001", "INV-016"], "test_mapping": ["forbidden_table_test/X8", "SAFE-NEG-005"] },
+    { "id": "X9", "source_state": "PENDING_APPROVAL", "target_state": "READY_FOR_INJECTION", "reason": "consume without mint", "enforcement_layer": ["jti_consume_atomic"], "violated_invariant": ["INV-016"], "test_mapping": ["forbidden_table_test/X9"] },
+    { "id": "X10", "source_state": "PENDING_APPROVAL", "target_state": "SENT_BY_HUMAN", "reason": "bypasses approval + injection", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-001"], "test_mapping": ["forbidden_table_test/X10"] },
+    { "id": "X11", "source_state": "PENDING_APPROVAL", "target_state": "APPROVED", "reason": "approval WITHOUT an authenticated human decision event (self/forged approval)", "enforcement_layer": ["actor_authorized", "human_decision_authenticated", "token_signature_valid"], "violated_invariant": ["INV-014", "INV-008"], "test_mapping": ["forbidden_table_test/X11", "SAFE-NEG-001", "SAFE-NEG-014"] },
+    { "id": "X12", "source_state": "APPROVED", "target_state": "SENT_BY_HUMAN", "reason": "software cannot send; only INJECTED->SENT via observation", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-021"], "test_mapping": ["forbidden_table_test/X12"] },
+    { "id": "X13", "source_state": "APPROVED", "target_state": "INJECTED", "reason": "injection without atomic jti consume (skips READY_FOR_INJECTION)", "enforcement_layer": ["jti_consume_atomic"], "violated_invariant": ["INV-016"], "test_mapping": ["forbidden_table_test/X13"] },
+    { "id": "X14", "source_state": "READY_FOR_INJECTION", "target_state": "SENT_BY_HUMAN", "reason": "skips actual injection + human send", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-021"], "test_mapping": ["forbidden_table_test/X14"] },
+    { "id": "X15", "source_state": "READY_FOR_INJECTION", "target_state": "APPROVED", "reason": "backward into mint; would imply re-mint", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-016"], "test_mapping": ["forbidden_table_test/X15"] },
+    { "id": "X16", "source_state": "INJECTED", "target_state": "APPROVED", "reason": "backward into mint without re-decision", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-014"], "test_mapping": ["forbidden_table_test/X16"] },
+    { "id": "X17", "source_state": "INJECTED", "target_state": "READY_FOR_INJECTION", "reason": "re-inject without re-consume", "enforcement_layer": ["jti_consume_atomic"], "violated_invariant": ["INV-016"], "test_mapping": ["forbidden_table_test/X17"] },
+    { "id": "X18", "source_state": "INJECTED", "target_state": "SENT_BY_HUMAN", "reason": "driven by anything other than human.send.observed (software asserting a send)", "enforcement_layer": ["legality_in_table_event_type"], "violated_invariant": ["INV-021"], "test_mapping": ["forbidden_table_test/X18", "SAFE-NEG-005"] },
+    { "id": "X19", "source_state": "REJECTED", "target_state": "ANY", "reason": "REJECTED is terminal", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-019"], "test_mapping": ["forbidden_table_test/X19"] },
+    { "id": "X20", "source_state": "SENT_BY_HUMAN", "target_state": "ANY", "reason": "SENT_BY_HUMAN is terminal", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-021"], "test_mapping": ["forbidden_table_test/X20"] },
+    { "id": "X21", "source_state": "ANY", "target_state": "APPROVED", "reason": "transition to APPROVED from an AI-originated event (draft.generated etc.)", "enforcement_layer": ["actor_authorized"], "violated_invariant": ["INV-014"], "test_mapping": ["forbidden_table_test/X21", "SAFE-NEG-001"] },
+    { "id": "X22", "source_state": "PENDING_APPROVAL", "target_state": "APPROVED", "reason": "decision==reject is not mintable", "enforcement_layer": ["decision_typed"], "violated_invariant": ["INV-014"], "test_mapping": ["forbidden_table_test/X22"] },
+    { "id": "X23", "source_state": "PENDING_APPROVAL", "target_state": "APPROVED", "reason": "expired token request (stale approval)", "enforcement_layer": ["token_not_expired"], "violated_invariant": ["INV-016"], "test_mapping": ["forbidden_table_test/X23", "SAFE-NEG-003"] },
+    { "id": "X24", "source_state": "APPROVED", "target_state": "READY_FOR_INJECTION", "reason": "reusing an already-consumed jti (replay)", "enforcement_layer": ["jti_consume_atomic"], "violated_invariant": ["INV-016"], "test_mapping": ["forbidden_table_test/X24", "SAFE-NEG-002"] },
+    { "id": "X25", "source_state": "APPROVED", "target_state": "READY_FOR_INJECTION", "reason": "token draft_hash != stored draft_hash (post-approval edit / wrong draft)", "enforcement_layer": ["draft_hash_match"], "violated_invariant": ["INV-017"], "test_mapping": ["forbidden_table_test/X25", "SAFE-NEG-004"] },
+    { "id": "X26", "source_state": "APPROVED", "target_state": "READY_FOR_INJECTION", "reason": "token thread_id != target thread (cross-thread token)", "enforcement_layer": ["thread_match"], "violated_invariant": ["INV-017"], "test_mapping": ["forbidden_table_test/X26"] },
+    { "id": "X27", "source_state": "APPROVED", "target_state": "READY_FOR_INJECTION", "reason": "token signed by a non-gateway key (forged/AI token)", "enforcement_layer": ["token_signature_valid", "issuer_type_valid"], "violated_invariant": ["INV-008"], "test_mapping": ["forbidden_table_test/X27", "SAFE-NEG-014"] },
+    { "id": "X28", "source_state": "ANY", "target_state": "ANY", "reason": "writing status from a call site other than the transition function (out-of-band write)", "enforcement_layer": ["ast_scan_CI-STATE-MACHINE"], "violated_invariant": ["INV-022"], "test_mapping": ["ci_state_machine_test/X28"] },
+    { "id": "X29", "source_state": "INJECTED", "target_state": "INJECTED", "reason": "re-applying a duplicate injection.completed (double effect)", "enforcement_layer": ["replay_check", "sequence_valid"], "violated_invariant": ["INV-018"], "test_mapping": ["ordering_property_test/X29", "SAFE-NEG-010"] },
+    { "id": "X30", "source_state": "PENDING_APPROVAL", "target_state": "APPROVED", "reason": "applied twice for one jti (duplicate approval)", "enforcement_layer": ["replay_check", "jti_consume_atomic"], "violated_invariant": ["INV-016", "INV-018"], "test_mapping": ["ordering_property_test/X30", "SAFE-NEG-010"] },
+    { "id": "X31", "source_state": "ANY", "target_state": "ANY", "reason": "applied out of order (seq <= applied_seq causing a second effect)", "enforcement_layer": ["sequence_valid", "order_in_sequence"], "violated_invariant": ["INV-018"], "test_mapping": ["ordering_property_test/X31", "SAFE-NEG-013"] },
+    { "id": "X32", "source_state": "NOT_INJECTED", "target_state": "SENT_BY_HUMAN", "reason": "any source != INJECTED (unobserved/forged send)", "enforcement_layer": ["legality_in_table"], "violated_invariant": ["INV-021"], "test_mapping": ["forbidden_table_test/X32"] },
+    { "id": "X33", "source_state": "DRAFTING", "target_state": "PENDING_APPROVAL", "reason": "output is not a valid DraftArtifact (is a command/effect)", "enforcement_layer": ["schema_valid_CI-GRAPH-OUTPUT"], "violated_invariant": ["INV-002"], "test_mapping": ["forbidden_table_test/X33", "SAFE-NEG-008"] },
+    { "id": "X34", "source_state": "ANY", "target_state": "ANY", "reason": "triggered by a dead_lettered or unknown-type event (acting on quarantined/poison input)", "enforcement_layer": ["schema_valid", "legality_in_table"], "violated_invariant": ["INV-018"], "test_mapping": ["forbidden_table_test/X34", "SAFE-NEG-007"] },
+    { "id": "X35", "source_state": "ANY", "target_state": "ANY", "reason": "state advance driven by a state.persisted event (circular causality: read-model feed driving control)", "enforcement_layer": ["legality_in_table_event_type"], "violated_invariant": ["INV-022"], "test_mapping": ["forbidden_table_test/X35"] },
+    { "id": "X36", "source_state": "CLOSED_OR_RESOLVED_THREAD", "target_state": "ANY", "reason": "terminal draft mutated under a closed/resolved thread (terminal immutability)", "enforcement_layer": ["default_deny"], "violated_invariant": ["INV-020"], "test_mapping": ["forbidden_table_test/X36"] }
+  ],
+  "runtime_assertions": [
+    { "id": "R1", "statement": "APPROVED exists => a valid Ed25519 token was minted by the gateway, bound to this thread + draft_hash.", "maps_to": ["INV-001", "INV-008"], "evaluation": "transition_time+offline", "severity": "hard" },
+    { "id": "R2", "statement": "SENT_BY_HUMAN exists => a preceding human.send.observed from source state INJECTED.", "maps_to": ["INV-021"], "evaluation": "transition_time+offline", "severity": "hard" },
+    { "id": "R3", "statement": "SENT_BY_HUMAN exists => a preceding TOKEN_MINTED tied to an authenticated human decision.", "maps_to": ["INV-001", "INV-019"], "evaluation": "offline_forensic", "severity": "hard" },
+    { "id": "R4", "statement": "READY_FOR_INJECTION exists => the draft's jti is marked consumed exactly once.", "maps_to": ["INV-016"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R5", "statement": "No jti is ever consumed twice (atomic CAS holds).", "maps_to": ["INV-016"], "evaluation": "transition_time+offline", "severity": "hard" },
+    { "id": "R6", "statement": "The cognition graph never advances past APPROVAL_GATE without a token verifying against the gateway public key.", "maps_to": ["INV-007", "INV-009"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R7", "statement": "Only the single transition function writes status; no other call site does.", "maps_to": ["INV-022"], "evaluation": "ci_ast_scan", "severity": "hard" },
+    { "id": "R8", "statement": "Every transition produced exactly one append-only audit record before its source event was acked.", "maps_to": ["INV-020"], "evaluation": "transition_time+offline", "severity": "hard" },
+    { "id": "R9", "statement": "The in-code transition table hash equals this fixture's integrity digest.", "maps_to": ["boot_assertion"], "evaluation": "boot", "severity": "hard" },
+    { "id": "R10", "statement": "No transition to APPROVED originated from an AI-produced event.", "maps_to": ["INV-014"], "evaluation": "transition_time+offline", "severity": "hard" },
+    { "id": "R11", "statement": "draft.generated payloads validate as DraftArtifact (data, never command).", "maps_to": ["INV-002"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R12", "statement": "The gateway binary links no LinkedIn messaging client and holds no LinkedIn credentials.", "maps_to": ["INV-003"], "evaluation": "boot+ci_ast_scan", "severity": "hard" },
+    { "id": "R13", "statement": "The signing (private) key exists only in the gateway; the AI Brain holds the public key only.", "maps_to": ["INV-008"], "evaluation": "boot+ci_secret_scan", "severity": "hard" },
+    { "id": "R14", "statement": "Every minted token has exp-iat <= 900s; no token outlives its TTL as valid.", "maps_to": ["INV-016"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R15", "statement": "Every consumed token's draft_hash equals the gateway's stored hash for that draft.", "maps_to": ["INV-017"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R16", "statement": "Per thread, applied seq is strictly monotonic; no event with seq <= applied_seq causes a second effect.", "maps_to": ["INV-018"], "evaluation": "transition_time+offline", "severity": "hard" },
+    { "id": "R17", "statement": "Every event is processed at-least-once but takes effect exactly-once (dedupe + idempotency).", "maps_to": ["INV-018"], "evaluation": "transition_time+property_test", "severity": "hard" },
+    { "id": "R18", "statement": "REJECTED and SENT_BY_HUMAN are terminal; no transition leaves them.", "maps_to": ["INV-019", "INV-021"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R19", "statement": "No configuration exists that enables auto-send, trusted-contact bypass, or skip-approval.", "maps_to": ["INV-015", "INV-019"], "evaluation": "ci_ast_scan", "severity": "hard" },
+    { "id": "R20", "statement": "injection.requested is emitted only after the jti is consumed (consume strictly precedes command).", "maps_to": ["INV-001", "INV-016"], "evaluation": "transition_time+offline", "severity": "hard" },
+    { "id": "R21", "statement": "INJECTED content hash equals the approved draft_hash (else SAFETY_VIOLATION).", "maps_to": ["INV-017"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R22", "statement": "A post-approval composer edit (hash change) invalidates the token and returns the draft to PENDING_APPROVAL.", "maps_to": ["INV-017"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R23", "statement": "Any (source, event) pair absent from the allowed table is rejected (default-deny).", "maps_to": ["legality_guard"], "evaluation": "transition_time+property_test", "severity": "hard" },
+    { "id": "R24", "statement": "No state.persisted event ever drives a state transition (no circular causality).", "maps_to": ["INV-022"], "evaluation": "transition_time", "severity": "hard" },
+    { "id": "R25", "statement": "Every forbidden-transition attempt (X1-X36) is rejected and audited; safety-class ones alarm.", "maps_to": ["INV-020"], "evaluation": "transition_time+property_test", "severity": "hard" }
+  ],
+  "invariants": {
+    "description": "Reference projection of docs/safety-invariant.md#5 (INV-001..022). The Go invariant engine asserts PARITY between this list and safety/invariants.yaml (CI-INVARIANT-PARITY). Statements abbreviated; the safety doc is authoritative.",
+    "registry": [
+      { "id": "INV-001", "gate": "CI-TOKEN-BINDING,CI-NO-AUTOSEND-PATH", "summary": "No outbound action without a valid single-use draft-bound human token." },
+      { "id": "INV-002", "gate": "CI-GRAPH-OUTPUT", "summary": "LangGraph output is data only (DraftArtifact)." },
+      { "id": "INV-003", "gate": "CI-NO-LINKEDIN-CLIENT", "summary": "No service links a LinkedIn messaging client or holds write creds." },
+      { "id": "INV-004", "gate": "CI-EGRESS", "summary": "AI Brain has no network route to LinkedIn." },
+      { "id": "INV-005", "gate": "CI-EXT-FORBIDDEN-API", "summary": "Extension cannot transmit to LinkedIn message-creating endpoints." },
+      { "id": "INV-006", "gate": "CI-GRAPH-TOPOLOGY", "summary": "Graph terminates at APPROVAL_GATE; no edge to an actuating node." },
+      { "id": "INV-007", "gate": "CI-RESUME-AUTH", "summary": "No resume past gate without a token verifying against the gateway public key." },
+      { "id": "INV-008", "gate": "CI-KEY-CUSTODY", "summary": "Only the gateway holds the signing key." },
+      { "id": "INV-009", "gate": "CI-RESUME-AUTH", "summary": "AI Brain cannot self-resume." },
+      { "id": "INV-010", "gate": "CI-NODE-TOOLS", "summary": "No node holds a tool outside the frozen allowlist." },
+      { "id": "INV-011", "gate": "CI-EXT-FORBIDDEN-API", "summary": "Extension never performs a Send-control click/send key event." },
+      { "id": "INV-012", "gate": "CI-EXT-FORBIDDEN-API", "summary": "Extension never calls submit()/requestSubmit() on the composer." },
+      { "id": "INV-013", "gate": "CI-EXT-FORBIDDEN-API", "summary": "Extension's only DOM write is composer injection; sends known only by observation." },
+      { "id": "INV-014", "gate": "CI-NO-AUTOSEND-PATH,CI-STATE-MACHINE", "summary": "APPROVED originates only from an authenticated human decision." },
+      { "id": "INV-015", "gate": "CI-NO-AUTOSEND-PATH", "summary": "No auto-send / trusted-contact bypass / skip-approval mode." },
+      { "id": "INV-016", "gate": "CI-TOKEN-BINDING", "summary": "Tokens single-use (atomic consume) and time-bounded; reuse/expired rejected." },
+      { "id": "INV-017", "gate": "CI-TOKEN-BINDING", "summary": "Tokens bound to thread_id + draft_hash; mismatch invalidates." },
+      { "id": "INV-018", "gate": "CI-STATE-MACHINE", "summary": "Events idempotent + per-thread monotonic; no second outbound-adjacent effect." },
+      { "id": "INV-019", "gate": "CI-NO-AUTOSEND-PATH", "summary": "Human approval required for every outbound message, no exception." },
+      { "id": "INV-020", "gate": "CI-AUDIT-COVERAGE", "summary": "Every transition/mint/consume/injection/observed-send is append-only audited." },
+      { "id": "INV-021", "gate": "CI-STATE-MACHINE", "summary": "SENT_BY_HUMAN reachable only from INJECTED via observed_send." },
+      { "id": "INV-022", "gate": "CI-STATE-MACHINE", "summary": "Only the single transition function writes status." }
+    ]
+  },
+  "ci_integration": {
+    "description": "How each tier consumes THIS fixture. Each gate is a required status check (non-skippable).",
+    "consumers": [
+      { "gate": "CI-FIXTURE-INTEGRITY", "consumes": "whole file", "action": "recompute SHA-256, compare to sidecar state-transitions.sha256; mismatch => fail." },
+      { "gate": "boot_validation (R9)", "consumes": "integrity digest + allowed_transitions + states", "action": "gateway embeds the table at build time and asserts its hash equals this fixture's digest; mismatch => refuse to boot (fail-closed)." },
+      { "gate": "CI-STATE-MACHINE", "consumes": "allowed_transitions + forbidden_transitions + states", "action": "table-test every allowed row is admitted under valid guards; every forbidden row (X1-X36) is rejected (default-deny); AST scan asserts only statemachine.Apply writes status (INV-022, X28)." },
+      { "gate": "CI-NO-AUTOSEND-PATH", "consumes": "authorities + transition T5 guards", "action": "call-graph analysis: no mint path reachable from a non-human event; decision_typed + human_decision_authenticated guards present on T5." },
+      { "gate": "CI-TOKEN-BINDING", "consumes": "guard_pipeline crypto guards + T5/T6", "action": "property test thread_match/draft_hash_match/token_not_expired/jti_consume_atomic." },
+      { "gate": "CI-AUDIT-COVERAGE", "consumes": "required_guards (audit_append present on every transition)", "action": "assert every allowed transition lists audit_append before xack_source." },
+      { "gate": "CI-INVARIANT-PARITY", "consumes": "invariants.registry + runtime_assertions", "action": "assert this list agrees with safety/invariants.yaml and that every runtime_assertion maps to a real invariant." },
+      { "gate": "CI-GUARD-ORDER", "consumes": "guard_pipeline.guards order", "action": "assert the running guard pipeline executes guards in ascending order index (crypto after legality after dedupe/order)." },
+      { "gate": "CI-EVENT-PARITY", "consumes": "events.registry", "action": "assert parity with contracts/event-types.yaml (REDIS doc) and that drives_transition references exist in allowed_transitions." },
+      { "gate": "forbidden_capability_detection", "consumes": "forbidden_transitions enforcement_layer (ast_scan_* entries)", "action": "static scan asserts the absence of out-of-band status writes (X28), state.persisted-driven transitions (X35), and any non-gateway producer of approval.granted/injection.requested." }
+    ],
+    "non_skippable": true,
+    "skipped_safety_test_fails_build": true
+  },
+  "worked_example_reference": {
+    "transition_id": "T5",
+    "note": "Full narrative walkthrough of PENDING_APPROVAL -> APPROVED is in docs/state-transition-fixture.md#8 (event, token validation, guards in order, runtime assertions fired, audit emission). This fixture supplies the machine-readable T5 row above; the doc supplies the resolved trace."
+  }
+}

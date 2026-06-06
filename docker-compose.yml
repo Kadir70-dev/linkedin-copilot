@@ -1,0 +1,111 @@
+# Compose v2.4 format so per-service mem_limit / mem_reservation are honored by
+# BOTH `docker-compose` (v1) and `docker compose` (v2) on a non-swarm host. These
+# RAM caps are the core OOM guard on an 8GB box: ollama can never grow large
+# enough to trigger the host OOM-killer (which was killing ai-brain with Exit 137).
+version: "2.4"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    # HARD RAM CAP — the single most important OOM guard. qwen2.5:3b loads in
+    # ~2.4GB and the premium qwen3:4b-instruct in ~3.4GB; one at a time fits well
+    # under 6g, leaving ~2GB for the OS + other containers on an 8GB laptop. If a
+    # model ever exceeds this, ONLY ollama is killed (predictable, auto-restarted)
+    # instead of the kernel killing a random process (which hit ai-brain before).
+    mem_limit: 6g
+    mem_reservation: 1g
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    environment:
+      # Low-resource CPU guardrails (HP EliteBook 840 G1 class, 2C/4T). Default
+      # multi-slot parallelism pins ALL cores (load avg ~9+); pin to ONE
+      # generation at a time + ONE resident model so the box never holds two.
+      OLLAMA_NUM_PARALLEL: "1"          # one generation at a time (no oversubscription)
+      OLLAMA_MAX_LOADED_MODELS: "1"     # never hold two models in RAM at once
+      OLLAMA_KEEP_ALIVE: "15m"          # keep the model warm (kills reload spikes) but free RAM after idle
+    healthcheck:
+      test: ["CMD", "ollama", "ps"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # GPU optional; CPU works (slower). Uncomment for NVIDIA:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: ["gpu"]
+
+  gateway:
+    build: ./services/gateway-go
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      REDIS_ADDR: redis:6379
+      GATEWAY_PORT: "8080"
+      DB_PATH: /data/app.db
+      # Reported (read-only) via GET /config + GET /stats so the extension and
+      # `make doctor` can show the active model strategy + queue. Keep in sync
+      # with ai-brain. No send capability is added by exposing these.
+      MODE: ${MODE:-general}
+      FAST_MODE: ${FAST_MODE:-false}
+      MODEL: ${MODEL:-qwen2.5:3b}
+      PREMIUM_MODEL: ${PREMIUM_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
+      PREMIUM_ROUTING: ${PREMIUM_ROUTING:-true}
+      SEQUENTIAL_MODE: ${SEQUENTIAL_MODE:-true}
+    ports:
+      - "8080:8080"
+    volumes:
+      - gwdata:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ai-brain:
+    build: ./services/ai-brain
+    restart: unless-stopped   # auto-recover on OOM (Exit 137) — Redis consumer
+                              # groups redeliver any unacked draft, so no work is lost.
+    mem_limit: 1200m          # python + langchain + redis client fit in <500MB; this
+                              # is generous headroom and bounds any leak.
+    environment:
+      REDIS_ADDR: redis:6379
+      OLLAMA_BASE_URL: http://ollama:11434
+      MODEL: ${MODEL:-qwen2.5:3b}                                   # base model
+      PREMIUM_MODEL: ${PREMIUM_MODEL:-qwen3:4b-instruct-2507-q4_K_M} # premium tier (founder/CEO/director)
+      PREMIUM_ROUTING: ${PREMIUM_ROUTING:-true}                     # smart routing on/off
+      SEQUENTIAL_MODE: ${SEQUENTIAL_MODE:-true}                     # strict one-profile-at-a-time generation
+      RAM_MIN_FREE_MB: ${RAM_MIN_FREE_MB:-1200}                     # defensive-mode threshold
+      FAST_MODE: ${FAST_MODE:-false}   # low-resource CPU profile (best-of=1, token caps, fast-path)
+      MODE: ${MODE:-general}           # vertical voice: general | fashion (apparel sourcing)
+    healthcheck:
+      # Confirms the worker's deps import and Redis is reachable. Informational
+      # in `docker-compose ps` / `make doctor`; auto-recovery is via restart policy.
+      test: ["CMD", "python", "-c", "import os,redis;h,p=os.getenv('REDIS_ADDR','redis:6379').split(':');redis.Redis(host=h,port=int(p)).ping()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama:
+  gwdata:

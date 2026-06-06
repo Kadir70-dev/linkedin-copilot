@@ -1,0 +1,637 @@
+# ============================================================================
+# contracts/event-types.yaml
+# Machine-readable EVENT AUTHORITY for the LinkedIn Copilot system.
+# Single source of truth for every event flowing across Redis Streams between
+# the Go Gateway, LangGraph AI Brain, Browser Extension, PWA, audit system,
+# runtime invariant engine, and CI parity checks.
+# Hand edits require an ADR + security sign-off + recomputed digest in one PR.
+# ============================================================================
+
+metadata:
+  contract_id: EVENT-TYPES-001
+  status: AUTHORITATIVE
+  description: >-
+    Machine-readable projection of docs/redis-stream-contracts.md (the event
+    backbone). Freezes the 14 canonical STREAM events plus the in-process
+    memory.retrieve.completed result. Does not define new transport; it encodes
+    the frozen contracts for validation, parity, and enforcement.
+  schema_version: "1.0.0"
+  schema_semantics: >-
+    semver. MAJOR = breaking field/shape change (parsers update);
+    MINOR = additive field; PATCH = clarification only.
+  contract_version: 1
+  contract_version_semantics: >-
+    monotonic integer over the CONTENT (the event set + bindings). Boot asserts
+    each service's embedded contract version equals this.
+  frozen: true
+  derived_authority:
+    - "docs/redis-stream-contracts.md#REDIS-STREAM-CONTRACTS-001 (authoritative for event payloads/streams)"
+    - "safety/frozen/state-transitions.json#STATE-TRANSITIONS-FROZEN-001 (events.registry, drives_transition, guards)"
+    - "safety/invariants.yaml#INVARIANTS-REGISTRY-001 (invariant_dependencies)"
+    - "docs/go-state-machine.md#GO-STATE-MACHINE-001 (transitions T1-T9)"
+  conflict_resolution: >-
+    On conflict: docs/redis-stream-contracts.md wins for payloads/streams,
+    safety/frozen/state-transitions.json wins for transition bindings,
+    safety/invariants.yaml wins for invariant text. This file is a projection
+    and is corrected to match them; it never overrides them.
+  integrity:
+    algorithm: SHA-256
+    scope: "entire byte content of contracts/event-types.yaml as committed (LF, terminal newline)"
+    self_reference_note: "digest stored in sidecar contracts/event-types.sha256 (not inside this file) and pinned in docs/event-contracts.md."
+    sidecar: "contracts/event-types.sha256"
+    boot_assertion: "each consumer recomputes this digest at boot vs the sidecar; mismatch => refuse to boot (fail-closed)."
+  parity_set_note: >-
+    The 14 entries under stream_events ARE the parity set asserted by
+    CI-EVENT-PARITY and CI-CONTRACT-ENUM (== contracts/events/*.schema.json ==
+    docs/redis-stream-contracts.md#2.2 == safety/frozen/state-transitions.json
+    events.registry). in_process_events is NOT part of the 14-event stream
+    parity set (see its note).
+  change_control: "ADR in docs/adr/ + security sign-off + recomputed digest + contract_version bump, all in one PR."
+
+# ----------------------------------------------------------------------------
+# 1. SCHEMA — field definitions, versioning, deprecation
+# ----------------------------------------------------------------------------
+schema:
+  per_event_fields:
+    - event_uid          # stable registry id (EVT-0NN), never reused
+    - event_name         # the wire `type`, dot-delimited (noun.past-verb[.qualifier])
+    - version            # event_version (integer >= 1), per-type payload schema version
+    - producer           # the role permitted to XADD (authority)
+    - consumer           # the consumer group(s) that XREADGROUP + XACK
+    - stream             # the Redis stream it lives on
+    - authority          # the authority semantics (claim vs authority-bearing)
+    - required_fields    # required data.* fields (envelope required fields are shared, see `envelope`)
+    - optional_fields    # optional data.* fields
+    - validation_rules   # type-specific validation beyond schema
+    - ordering_requirements
+    - idempotency_requirements
+    - retry_behavior
+    - security_constraints
+    - invariant_dependencies
+    - audit_requirements
+    - failure_modes
+    - drives_transition  # transition id(s) in the FSM, or [] if none
+
+  versioning:
+    model: semver_at_file_level + per_event_integer
+    per_event_version_field: event_version
+    expand_contract:
+      additive: >-
+        new OPTIONAL field, or a new enum value a consumer can ignore => do NOT bump
+        event_version. Consumers MUST be tolerant readers (ignore unknown fields).
+      breaking: >-
+        remove/rename a field, change a type, or make an optional field required =>
+        bump event_version; producers emit the new version only after all consumers
+        advertise support (capability handshake recorded in state:consumer_caps);
+        consumers dual-read old+new for one migration window.
+    no_inplace_mutation: "historical stream entries keep their original event_version; the forensic verifier maps versions via contracts/migrations/."
+  deprecation_model:
+    phases: [active, deprecated, retired]
+    active: "in use; the current event_version is emitted."
+    deprecated: >-
+      a successor event_version (or event_name) exists. The deprecated version is
+      still ACCEPTED by consumers (dual-read) but no longer EMITTED by updated
+      producers. Marked with `deprecated_in` + `successor`. Minimum one migration
+      window before retirement.
+    retired: >-
+      no longer emitted or accepted on live streams; retained only for forensic
+      replay via contracts/migrations/. Requires an ADR. event_uid is never reused.
+    rule: "an event type is NEVER hard-deleted from this registry; it is retired. This preserves audit replayability."
+
+# ----------------------------------------------------------------------------
+# Shared ENVELOPE (docs/redis-stream-contracts.md#3.0). Every stream event
+# carries these; per-event `required_fields`/`optional_fields` are data.* only.
+# ----------------------------------------------------------------------------
+envelope:
+  required:
+    - { field: event_id,         type: ULID,    note: "globally unique; the idempotency key (INV-018)" }
+    - { field: type,             type: enum,     note: "the event_name; member of the closed registry" }
+    - { field: event_version,    type: integer,  note: ">= 1" }
+    - { field: timestamp,        type: rfc3339,  note: "UTC, millisecond precision" }
+    - { field: correlation_id,   type: string,   note: "stable across the whole workflow" }
+    - { field: causation_id,     type: ULID,     note: "event_id of the direct cause; ABSENT only on the root (message.received)" }
+    - { field: thread_id,        type: string,   note: "required for thread-scoped events" }
+    - { field: producer,         type: enum,     note: "extension | gateway | ai_brain | pwa" }
+    - { field: producer_instance,type: string,   note: "instance/host id for forensic attribution" }
+    - { field: data,             type: object,   note: "per-type payload (the required/optional fields below)" }
+  conditionally_required:
+    - { field: message_id, when: "a specific inbound/outbound message is in scope" }
+    - { field: seq,        when: "thread-scoped events; per-thread monotonic (INV-018)" }
+  rules:
+    - "unknown top-level fields MUST be tolerated (forward-compat)."
+    - "unknown `type` MUST be dead-lettered, never acted on (X34, INV-018)."
+    - "the gateway recomputes any *_hash it relies on; it never trusts a wire-supplied hash (INV-017)."
+
+# ----------------------------------------------------------------------------
+# 3. AUTHORITY MODEL — who may emit each event. Fail closed.
+# ----------------------------------------------------------------------------
+authority_model:
+  principle: >-
+    Streams transport CLAIMS; only the gateway adjudicates them (Control-Plane
+    Principle). `producer` is enforced by Redis ACL (docs/redis-stream-contracts
+    #1.5), not convention. An event whose producer role is not permitted is a
+    SAFETY_VIOLATION and is dead-lettered.
+  roles:
+    extension: "captures DOM, injects, observes. Emits claims only."
+    ai_brain: "cognition only; emits DraftArtifact data only; holds public key only (cannot mint, INV-008)."
+    pwa: "displays drafts, captures human decision (submitted to the gateway endpoint, not XADD'd directly)."
+    gateway: "single system authority; sole emitter of authority-bearing events."
+  authority_bearing_events:
+    description: "events that can change authority/state. Their physical XADD is performed by the GATEWAY only."
+    members: [approval.granted, approval.rejected, injection.requested]
+    rule_producer_gateway: >-
+      approval.granted / approval.rejected / injection.requested MUST carry
+      producer==gateway. Any other producer => SAFETY_VIOLATION + dead_letter.
+      A client (PWA/extension) submits a human decision to the gateway's
+      authenticated endpoint; the gateway authenticates it, mints/does not mint a
+      token, and emits the event. No client XADD can manufacture authority
+      (INV-014).
+  explicit_denials:
+    - "AI Brain MUST NOT emit any authority-changing event (approval.*, injection.requested). ACL denies it."
+    - "Extension MUST NOT emit approval.* (no approval authority). ACL denies it."
+    - "PWA MUST NOT XADD any stream directly; it submits decisions to the gateway endpoint."
+    - "No role except the gateway may emit injection.requested (it requires a consumed jti + signed command)."
+  fail_closed: "an event from a non-permitted producer is never processed; it is dead-lettered + alarmed."
+
+# ----------------------------------------------------------------------------
+# 4. VALIDATION RULES (global). Per-event specifics in each entry.
+# ----------------------------------------------------------------------------
+validation_rules:
+  schema:
+    rule: "every event validates against contracts/events/<type>.v<version>.schema.json BEFORE any action. Invalid => dead_letter(schema_invalid). Producers also validate on emit."
+  correlation_id:
+    rule: "minted by the root event (message.received). Every descendant copies it verbatim. A workflow is the set of events sharing a correlation_id."
+    on_violation: "missing/altered correlation_id on a non-root event => dead_letter."
+  causation_id:
+    rule: "set to the event_id of the single event that directly caused this one. ABSENT only on message.received (the root). Forms the causal DAG the forensic verifier walks."
+    on_violation: "missing causation_id on a non-root event => dead_letter."
+  sequence:
+    rule: >-
+      thread-scoped events carry per-thread monotonic `seq`. Gateway assigns/normalizes
+      on ingest. seq == applied+1 applies; seq > applied+1 parks in the reorder buffer
+      (unacked); seq <= applied is a duplicate/stale (deduped, acked, no effect) (INV-018).
+  replay_protection_hooks:
+    - "event_id dedupe: SET seen:<group>:<event_id> NX EX <ttl>; duplicate => XACK + skip."
+    - "per-thread applied_seq cursor: seq <= applied_seq => already processed."
+    - "effect-level single-use: jti atomic consume for the one authority-bearing actuation (approval->injection) (INV-016)."
+  hash_recomputation:
+    rule: "any *_hash a guard depends on (draft_hash, composer_text_hash) is recomputed by the gateway from stored/observed content; the wire value is a cross-check only (INV-017)."
+
+# ----------------------------------------------------------------------------
+# 5. SECURITY MODEL (global). Per-event specifics in each `security_constraints`.
+# ----------------------------------------------------------------------------
+security_model:
+  trust_boundaries:
+    extension_to_gateway: "untrusted claims over Tailscale/local TLS; gateway adjudicates. DOM content (body_text) is UNTRUSTED data (prompt-injection boundary, T9)."
+    ai_brain_to_gateway: "untrusted claims; output strictly parsed as DraftArtifact (data only, INV-002). AI Brain has no LinkedIn route (INV-004)."
+    pwa_to_gateway: "authenticated, device-attested human decisions via the gateway endpoint (not raw stream writes)."
+    gateway_internal: "the trust anchor; sole minter/consumer of tokens (INV-008)."
+  signature_requirements:
+    approval_token: "approval.granted.data.approval_token is an Ed25519 JWS signed by the gateway private key; verified by consumers against the gateway public key (INV-008)."
+    inject_command: "injection.requested.data.inject_command_sig is a gateway Ed25519 signature over the inject command; the extension verifies it before injecting (INV-001)."
+    bundle_attestation: "injection.requested.data.bundle_hash_expected pins the extension build; the extension injects only if its running bundle hash matches (T6)."
+  spoof_resistance:
+    - "producer ACL + producer==gateway check on authority-bearing events blocks a client forging them."
+    - "Ed25519 signatures make a forged/AI-minted token or inject command fail verification (INV-008)."
+  replay_resistance:
+    - "single-use jti (atomic consume), event_id dedupe, per-thread seq monotonicity (INV-016, INV-018)."
+  stale_event_handling:
+    - "tokens carry exp (<=900s); a late approval.granted with an expired token is rejected (INV-016)."
+    - "approval.requested carries expires_at (decision-request TTL); a decision after expiry is rejected before mint."
+    - "a token against a since-edited draft fails draft_hash binding (INV-017)."
+
+# ----------------------------------------------------------------------------
+# 6. CI PARITY — fail build on drift.
+# ----------------------------------------------------------------------------
+ci_parity:
+  policy: "every check is a required, non-skippable status check."
+  checks:
+    CI-EVENT-PARITY:
+      asserts: "stream_events (14) == docs/redis-stream-contracts.md#2.2 == safety/frozen/state-transitions.json events.registry == contracts/events/*.schema.json; every drives_transition resolves to a real allowed transition and vice versa."
+      blocking_severity: CRITICAL
+      failure_output: "diff of missing/extra event names or dangling transition refs"
+      remediation: "reconcile this file with the authorities; never silence the diff"
+    CI-CONTRACT-ENUM:
+      asserts: "the closed event-name set here equals the JSON Schema files in contracts/events/"
+      blocking_severity: CRITICAL
+    CI-SCHEMA-DRIFT:
+      asserts: "each event's required/optional fields match its contracts/events/<type>.vN.schema.json; codegen (Go/Python/TS) regenerates identically"
+      blocking_severity: CRITICAL
+      failure_output: "field-level diff per event"
+    CI-FORBIDDEN-PRODUCER:
+      asserts: "no service is wired to XADD an event its role is not permitted to produce (cross-check vs Redis ACLs)"
+      blocking_severity: CRITICAL
+      failure_output: "the (service, event) pair that violates the ACL"
+    CI-UNAUTHORIZED-EMISSION:
+      asserts: "no code path emits an authority-bearing event (approval.*, injection.requested) from a non-gateway service or from a non-human-decision trigger (cross-check vs CI-NO-AUTOSEND-PATH)"
+      blocking_severity: CRITICAL
+      remediation: "route all authority-bearing emissions through the gateway's human-decision path"
+    CI-FIXTURE-INTEGRITY:
+      asserts: "this file's digest == contracts/event-types.sha256"
+      blocking_severity: CRITICAL
+    CI-INVARIANT-XREF:
+      asserts: "every invariant_dependency names a real invariant in safety/invariants.yaml; every audit_requirement names a real audit record event"
+      blocking_severity: CRITICAL
+
+# ----------------------------------------------------------------------------
+# 7. RUNTIME CONSUMPTION MODEL
+# ----------------------------------------------------------------------------
+runtime_consumption_model:
+  delivery: "at-least-once via Redis consumer groups (XREADGROUP + PEL + XACK). Duplicates are expected and deduped; loss is not tolerated."
+  ack_discipline: "move-then-ack everywhere: audit/DLQ write commits BEFORE XACK, so a crash redelivers rather than loses."
+  ordering: "per-stream by entry-id; per-thread by seq (the correctness authority). Per-thread serialization via thread lock; cross-thread parallel."
+  retry_semantics:
+    transient: "retryable errors (EXT_TIMEOUT, OLLAMA_BUSY, REDIS_TIMEOUT, lock contention) => retry.requested with exp-jitter backoff (base=250ms, cap=30s), max_attempts default 5."
+    permanent: "schema_invalid, unknown_type, signature_invalid, safety_violation => straight to dead_letter, no retry."
+    idempotent: "retries carry the same idempotency key; never re-mint, never re-consume, never double-advance."
+  dead_letter_behavior:
+    stream: "stream:dead_letter"
+    consumer: "cg:operator (manual recovery only)"
+    classes: [schema_invalid, unknown_type, max_retries_exceeded, poison, safety_violation, signature_invalid]
+    safety_classes_never_auto_recovered: [safety_violation, signature_invalid]
+  audit_mirror: "every audit-relevant event is mirrored to stream:audit (cg:persistence-audit, cg:forensic) and drained into the append-only hash-chained log (INV-020)."
+  consumers_index:
+    message.received: cg:gateway-ingest
+    thread.updated: cg:gateway-ingest
+    memory.retrieve.requested: cg:gateway-cognition (audit/observability only; gateway does not act on it)
+    draft.requested: cg:ai-brain
+    draft.generated: cg:gateway-cognition
+    approval.requested: "client tails (read-only) + cg:gateway-approval (records emission)"
+    approval.granted: cg:gateway-approval
+    approval.rejected: cg:gateway-approval
+    injection.requested: cg:extension-injection
+    injection.completed: cg:gateway-injection
+    human.send.observed: cg:gateway-observe
+    state.persisted: cg:persistence-worker
+    retry.requested: cg:retry-worker
+    dead_lettered: cg:operator
+
+# ============================================================================
+# 2. FROZEN STREAM EVENTS (the 14-event parity set). Order is canonical.
+# ============================================================================
+stream_events:
+
+  - event_uid: EVT-001
+    event_name: message.received
+    version: 1
+    lifecycle: active
+    producer: extension
+    consumer: [cg:gateway-ingest]
+    stream: stream:message_ingest
+    authority: claim_extension_gateway_adjudicates
+    required_fields: [thread_id, message_id, sender, body_text, captured_at, direction, thread_snapshot_hash]
+    optional_fields: [attachments, prior_message_id, linkedin_thread_urn]
+    validation_rules:
+      - "ROOT event: causation_id ABSENT; gateway mints correlation_id if absent and assigns per-thread seq on ingest."
+      - "direction == inbound."
+      - "sender = { urn, display_name }."
+      - "body_text is UNTRUSTED data (prompt-injection boundary)."
+    ordering_requirements: "assigns/normalizes seq on ingest; root of the per-thread chain."
+    idempotency_requirements: "key = thread_id + message_id (one workflow per inbound message)."
+    retry_behavior: "not retried; idempotent on thread_id+message_id; duplicates deduped."
+    security_constraints: "extension-to-gateway trust boundary; body_text tagged untrusted; no signature."
+    invariant_dependencies: [INV-018, INV-020]
+    audit_requirements: "RECEIVED record."
+    failure_modes: "schema_invalid => dead_letter; unknown thread => created, not failed."
+    drives_transition: [T1]
+
+  - event_uid: EVT-002
+    event_name: thread.updated
+    version: 1
+    lifecycle: active
+    producer: extension
+    consumer: [cg:gateway-ingest]
+    stream: stream:message_ingest
+    authority: claim_extension_gateway_adjudicates
+    required_fields: [thread_id, change_kind, thread_snapshot_hash, observed_at]
+    optional_fields: [composer_text, new_bubble_ref]
+    validation_rules:
+      - "change_kind in {composer_changed, bubble_appeared, read_state, participants}."
+      - "composer_text present only for composer_changed."
+      - "a composer_changed after INJECTED whose hash != approved draft_hash drives T9 (token invalidation)."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = thread_id + new composer hash (edit detection is idempotent)."
+    retry_behavior: "not retried."
+    security_constraints: "extension-to-gateway; no signature; composer_text untrusted."
+    invariant_dependencies: [INV-017, INV-021]
+    audit_requirements: "if it drives T9: a transition record PENDING_APPROVAL re-entry + token INVALIDATED."
+    failure_modes: "schema_invalid => dead_letter; hash unchanged => no-op."
+    drives_transition: [T9]
+
+  - event_uid: EVT-003
+    event_name: memory.retrieve.requested
+    version: 1
+    lifecycle: active
+    producer: ai_brain
+    consumer: [cg:gateway-cognition]
+    stream: stream:cognition_request
+    authority: observability_only_gateway_does_not_act
+    required_fields: [query_kind, query_digest, top_k]
+    optional_fields: [filters]
+    validation_rules:
+      - "query_kind in {thread_history, contact_profile, semantic}."
+      - "query_digest is a HASH of the query, never the raw text (keeps retrieval terms off the stream)."
+      - "AUDIT-ONLY: the gateway records it for the forensic DAG but takes NO control action. The actual retrieval is a synchronous read-only node tool (memory.vector_query), not a stream RPC. There is NO memory.retrieve.completed stream event (see in_process_events)."
+    ordering_requirements: "carries the seq of the draft.requested that caused it."
+    idempotency_requirements: "key = graph_run_id + query_digest (observability dedupe)."
+    retry_behavior: "not retried (observability)."
+    security_constraints: "ai_brain-to-gateway; no signature; digest not raw query."
+    invariant_dependencies: [INV-020, INV-010]
+    audit_requirements: "MEMORY_RETRIEVE provenance record (read-only)."
+    failure_modes: "schema_invalid => dead_letter; never affects state."
+    drives_transition: []
+
+  - event_uid: EVT-004
+    event_name: draft.requested
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: [cg:ai-brain]
+    stream: stream:cognition_request
+    authority: gateway
+    required_fields: [trigger_message_id, thread_context_ref, idempotency_scope, graph_run_id]
+    optional_fields: [style_hints, prior_draft_id]
+    validation_rules:
+      - "thread_context_ref is a gateway-provided READ-ONLY handle to assembled context."
+      - "one in-flight draft per inbound (idempotency_scope = message_id)."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = idempotency_scope (message_id)."
+    retry_behavior: "retryable; exp-jitter base=250ms cap=30s; max_attempts=5; idempotency_key=idempotency_scope."
+    security_constraints: "gateway-internal dispatch; ai_brain has no LinkedIn route (INV-004)."
+    invariant_dependencies: [INV-002, INV-010]
+    audit_requirements: "DRAFTING transition record (downstream of T2)."
+    failure_modes: "cognition unavailable => reconciler retry; exhaustion => DLQ; state stays DRAFTING."
+    drives_transition: [T2]
+
+  - event_uid: EVT-005
+    event_name: draft.generated
+    version: 1
+    lifecycle: active
+    producer: ai_brain
+    consumer: [cg:gateway-cognition]
+    stream: stream:cognition_result
+    authority: claim_ai_brain_gateway_adjudicates
+    required_fields: [draft_id, graph_run_id, checkpoint_id, draft, draft_hash, model_meta]
+    optional_fields: [meeting_intent]
+    validation_rules:
+      - "draft is a DraftArtifact { text, structured_fields?, slot_choices? } — DATA ONLY, never a command (INV-002)."
+      - "the gateway RECOMPUTES draft_hash from data.draft and rejects on mismatch; it does not trust the producer hash."
+      - "graph_run_id/checkpoint_id must match the dispatched run; graph is suspended at APPROVAL_GATE."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = graph_run_id + draft_id (one PENDING_APPROVAL per run)."
+    retry_behavior: "retryable; exp-jitter; max_attempts=5; idempotency_key=graph_run_id+draft_id."
+    security_constraints: "ai_brain-to-gateway; output strictly parsed as DraftArtifact; carries NO token/command."
+    invariant_dependencies: [INV-002, INV-006]
+    audit_requirements: "DRAFT_READY record with the recomputed draft_hash."
+    failure_modes: "non-DraftArtifact output => CI-GRAPH-OUTPUT / dead_letter(schema_invalid); stays DRAFTING (X33)."
+    drives_transition: [T3]
+
+  - event_uid: EVT-006
+    event_name: approval.requested
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: ["client tails (read-only)", cg:gateway-approval]
+    stream: stream:approval
+    authority: gateway_solicits_human
+    required_fields: [draft_id, draft, draft_hash, graph_run_id, checkpoint_id, expires_at, thread_summary]
+    optional_fields: [meeting_slots, edit_allowed]
+    validation_rules:
+      - "carries display copy + everything a client needs to decide; nothing that can actuate."
+      - "expires_at is the decision-request TTL (distinct from token exp)."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = draft_id (one open request per draft; re-solicit supersedes)."
+    retry_behavior: "not retried; re-solicited on expiry (ApprovalState EXPIRED->REQUESTED)."
+    security_constraints: "fan-out to the user's clients; read-only tails; no token present."
+    invariant_dependencies: [INV-019]
+    audit_requirements: "APPROVAL_REQUESTED record."
+    failure_modes: "expires_at elapsed => EXPIRED; no state advance."
+    drives_transition: []
+
+  - event_uid: EVT-007
+    event_name: approval.granted
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: [cg:gateway-approval]
+    stream: stream:approval
+    authority: authority_bearing_gateway_on_authenticated_human_approve_MINTS_TOKEN
+    required_fields: [draft_id, decision, approved_draft_hash, approval_token, approver_id, device_id, graph_run_id, checkpoint_id]
+    optional_fields: [edited_text]
+    validation_rules:
+      - "producer MUST be gateway; producer != gateway => SAFETY_VIOLATION + dead_letter."
+      - "decision in {approve, approve_with_edit}; reject is NEVER mintable here."
+      - "approved_draft_hash = hash of the (possibly edited) approved content; the token binds THIS hash."
+      - "approval_token is an Ed25519 JWS (jti single-use, exp <= 900s, thread+hash bound)."
+      - "the token is VERIFIED, not trusted, by every consumer that acts on it."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = jti (token nonce); one APPROVED; second consume rejected (INV-016)."
+    retry_behavior: "not retried (one-shot human decision); duplicate deduped by event_id + single-use jti."
+    security_constraints: "AUTHORITY-BEARING. Ed25519 gateway-signed token. Physical XADD by gateway after authenticated, device-attested human approve (INV-014). Spoof-resistant via producer==gateway + signature."
+    invariant_dependencies: [INV-008, INV-014, INV-016, INV-017, INV-001, INV-019]
+    audit_requirements: "TOKEN_MINTED record (approver_id, device_id, jti, draft_hash)."
+    failure_modes: "non-gateway producer / non-human-authenticated / decision==reject / hash mismatch => SAFETY_VIOLATION + dead_letter; stays PENDING_APPROVAL."
+    drives_transition: [T5]
+
+  - event_uid: EVT-008
+    event_name: approval.rejected
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: [cg:gateway-approval]
+    stream: stream:approval
+    authority: authority_bearing_gateway_on_authenticated_human_reject
+    required_fields: [draft_id, decision, approver_id, device_id, reason_code]
+    optional_fields: [reason_text, request_redraft]
+    validation_rules:
+      - "producer MUST be gateway."
+      - "decision == reject; NO token is minted (decision-typed)."
+      - "reason_code in {not_now, wrong_tone, factually_wrong, other}."
+      - "request_redraft==true => gateway additionally emits a fresh draft.requested under the same correlation_id."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = draft_id (terminal REJECTED)."
+    retry_behavior: "not retried (terminal human decision)."
+    security_constraints: "AUTHORITY-BEARING (terminal). producer==gateway; no token; human-attributed."
+    invariant_dependencies: [INV-019, INV-020]
+    audit_requirements: "DECISION(reject) record; REJECTED terminal."
+    failure_modes: "non-gateway producer => SAFETY_VIOLATION + dead_letter."
+    drives_transition: [T4]
+
+  - event_uid: EVT-009
+    event_name: injection.requested
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: [cg:extension-injection]
+    stream: stream:injection
+    authority: authority_bearing_gateway_after_jti_consume
+    required_fields: [draft_id, inject_text, inject_text_hash, consumed_jti, inject_command_sig, target_thread_id, bundle_hash_expected]
+    optional_fields: [slot_ics_ref]
+    validation_rules:
+      - "issued ONLY after the token jti is atomically consumed (consume strictly precedes command emission, INV-001/INV-016)."
+      - "inject_text_hash == approved draft_hash."
+      - "consumed_jti references the consumed token (proves a real human approval preceded this)."
+      - "the extension refuses to inject unless inject_command_sig verifies, consumed_jti is present, AND its running bundle hash == bundle_hash_expected."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = draft_id + consumed_jti (one injection command per consumed token)."
+    retry_behavior: "retryable; same consumed_jti; re-issues the COMMAND idempotently; never re-mints/re-consumes."
+    security_constraints: "AUTHORITY-BEARING. Gateway Ed25519 signature over the command (inject_command_sig). Bundle-hash attestation pin. producer==gateway."
+    invariant_dependencies: [INV-001, INV-016]
+    audit_requirements: "TOKEN_CONSUMED record + inject command issued."
+    failure_modes: "extension refuses (bad sig/missing jti/bundle mismatch) => InjectionState REFUSED, no advance, alarm."
+    drives_transition: [T6]
+
+  - event_uid: EVT-010
+    event_name: injection.completed
+    version: 1
+    lifecycle: active
+    producer: extension
+    consumer: [cg:gateway-injection]
+    stream: stream:injection
+    authority: claim_extension_gateway_adjudicates
+    required_fields: [draft_id, consumed_jti, result, composer_text_hash, injected_at]
+    optional_fields: [refusal_reason]
+    validation_rules:
+      - "result in {injected, refused, dom_error}."
+      - "on result==injected: composer_text_hash MUST equal inject_text_hash/draft_hash, else SAFETY_VIOLATION (injected content != approved)."
+      - "injection is NOT sending."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = draft_id + consumed_jti (one INJECTED)."
+    retry_behavior: "result==dom_error => retry; exhaustion => InjectionState FAILED + DLQ."
+    security_constraints: "extension-to-gateway claim; hash-checked against the approved content."
+    invariant_dependencies: [INV-013, INV-017]
+    audit_requirements: "INJECT_CONFIRMED record (on injected)."
+    failure_modes: "refused => no advance + alarm; hash mismatch => SAFETY_VIOLATION; dom_error => retry."
+    drives_transition: [T7]
+
+  - event_uid: EVT-011
+    event_name: human.send.observed
+    version: 1
+    lifecycle: active
+    producer: extension
+    consumer: [cg:gateway-observe]
+    stream: stream:observed_send
+    authority: passive_observation_extension_gateway_adjudicates
+    required_fields: [draft_id, observed_outbound_message_id, observed_text_hash, observed_at, evidence]
+    optional_fields: [latency_from_inject_ms]
+    validation_rules:
+      - "PASSIVE: derived from a DOM mutation (a new outbound bubble), never from performing a send (INV-013, INV-021)."
+      - "evidence = { bubble_ref, mutation_kind }."
+      - "source DraftState MUST be INJECTED for this to advance to SENT_BY_HUMAN (INV-021)."
+      - "observed_text_hash != draft_hash => SENT_BY_HUMAN with content_diverged flag (still a human send)."
+    ordering_requirements: "thread-scoped seq."
+    idempotency_requirements: "key = observed_outbound_message_id (one SENT_BY_HUMAN per observed bubble)."
+    retry_behavior: "not retried (passive observation)."
+    security_constraints: "extension-to-gateway claim; carries DOM evidence; software has no send capability (G2/G3)."
+    invariant_dependencies: [INV-013, INV-021]
+    audit_requirements: "OBSERVED_SEND record (with evidence; content_diverged flag if applicable)."
+    failure_modes: "source != INJECTED => recorded as an independent human send (audit), NOT a state advance of this draft."
+    drives_transition: [T8]
+
+  - event_uid: EVT-012
+    event_name: state.persisted
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: [cg:persistence-worker]
+    stream: stream:persistence
+    authority: gateway_fact_after_commit
+    required_fields: [draft_id, from_state, to_state, transition_trigger, audit_seq, committed_at]
+    optional_fields: [jti, draft_hash]
+    validation_rules:
+      - "emitted AFTER the authoritative state write; reflects COMMITTED truth."
+      - "transition_trigger == this event's causation_id (the event_id that caused the transition)."
+      - "FACT-AFTER-COMMIT: NEVER the trigger of another transition (avoids circular causality, X35)."
+    ordering_requirements: "thread-scoped seq; mirrors a committed transition."
+    idempotency_requirements: "key = audit_seq (one projection apply)."
+    retry_behavior: "retryable (read-model feed); idempotent on audit_seq."
+    security_constraints: "gateway-internal; drives read models only, never control."
+    invariant_dependencies: [INV-020, INV-022]
+    audit_requirements: "mirrors the transition's audit record (audit_seq)."
+    failure_modes: "if used to drive a transition => rejected (X35, INV-022)."
+    drives_transition: []
+
+  - event_uid: EVT-013
+    event_name: retry.requested
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: [cg:retry-worker]
+    stream: stream:retry
+    authority: gateway_retry_scheduler
+    required_fields: [original_event_id, original_stream, original_type, attempt, max_attempts, next_attempt_at, last_error]
+    optional_fields: [backoff_ms]
+    validation_rules:
+      - "attempt is 1-based; <= max_attempts (default 5)."
+      - "last_error = { code, message_digest }."
+      - "re-issues the original effect IDEMPOTENTLY; never bypasses safety (a retried injection keeps the same consumed_jti)."
+    ordering_requirements: "scheduled by next_attempt_at (ZSET); not a thread-ordering authority."
+    idempotency_requirements: "key = original_event_id + attempt."
+    retry_behavior: "this IS the retry mechanism; exp-jitter base=250ms cap=30s."
+    security_constraints: "gateway-internal; cannot re-mint or re-consume; safety-class errors are NOT retried (go to DLQ)."
+    invariant_dependencies: [INV-018]
+    audit_requirements: "RETRY_SCHEDULED record."
+    failure_modes: "attempt > max_attempts => dead_letter(max_retries_exceeded)."
+    drives_transition: []
+
+  - event_uid: EVT-014
+    event_name: dead_lettered
+    version: 1
+    lifecycle: active
+    producer: gateway
+    consumer: [cg:operator]
+    stream: stream:dead_letter
+    authority: gateway_on_give_up
+    required_fields: [original_envelope, failure_class, failure_detail, attempts, first_seen_at, dead_lettered_at, source_stream, source_group]
+    optional_fields: [quarantine_ref]
+    validation_rules:
+      - "original_envelope is the verbatim failed event (incl. its original event_id)."
+      - "failure_class in {schema_invalid, unknown_type, max_retries_exceeded, poison, safety_violation, signature_invalid}."
+      - "MOVE-THEN-ACK: the DLQ wrapper is durably XADD'd BEFORE the source entry is XACK'd."
+      - "failure_class in {safety_violation, signature_invalid} is alarm-worthy and mirrored to stream:audit as SAFETY_VIOLATION; NEVER auto-recovered."
+    ordering_requirements: "none (quarantine)."
+    idempotency_requirements: "key = original_envelope.event_id + failure_class."
+    retry_behavior: "terminal for the original; leaves only via manual operator recovery."
+    security_constraints: "operator can REPLAY transport (idempotent) but cannot mint tokens, force transitions, or fabricate approvals."
+    invariant_dependencies: [INV-020]
+    audit_requirements: "DEAD_LETTERED record; recovery actions are themselves audited (tombstone), never silent-deleted."
+    failure_modes: "n/a (this IS the failure sink)."
+    drives_transition: []
+
+# ============================================================================
+# IN-PROCESS (NON-STREAM) EVENT TYPES — documented for completeness; NOT part
+# of the 14-event stream parity set; NOT transported on any Redis stream.
+# ============================================================================
+in_process_events:
+  note: >-
+    docs/redis-stream-contracts.md#3.3 is authoritative: there is intentionally NO
+    memory.retrieve.completed stream event. Memory retrieval is a synchronous,
+    read-only node tool (memory.vector_query) whose result returns INSIDE the
+    LangGraph process. memory.retrieve.completed is modeled here ONLY as the
+    in-process result type for documentation/observability symmetry. It is never
+    emitted on a stream, has no producer ACL, and CI-EVENT-PARITY does not count it
+    among the 14 stream events.
+  events:
+    - event_uid: EVT-INP-001
+      event_name: memory.retrieve.completed
+      version: 1
+      lifecycle: active
+      transport: in_process
+      producer: ai_brain_internal_node
+      consumer: ai_brain_internal_node
+      stream: none
+      authority: none_internal_synchronous_result
+      required_fields: [query_digest, hits, retrieved_at]
+      optional_fields: [scores, truncated]
+      validation_rules:
+        - "synchronous return of memory.vector_query inside the graph; READ-ONLY result."
+        - "NEVER XADD'd to a stream; never crosses a trust boundary; never drives a gateway transition."
+        - "hits carry no actuation; they are context for generate_draft only."
+      ordering_requirements: "n/a (in-process, synchronous)."
+      idempotency_requirements: "n/a (pure function of the query within one run)."
+      retry_behavior: "in-process retry of the read query only; no stream retry."
+      security_constraints: "stays within the AI Brain process; AI Brain has no LinkedIn route (INV-004)."
+      invariant_dependencies: [INV-010, INV-002]
+      audit_requirements: "the paired stream event memory.retrieve.requested (EVT-003) provides the auditable provenance; the completed result is not separately streamed."
+      failure_modes: "retrieval error => handled in-process; the graph proceeds with reduced context or surfaces a draft failure; no state effect."
+      drives_transition: []

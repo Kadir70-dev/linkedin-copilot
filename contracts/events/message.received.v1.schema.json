@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/message.received.v1.schema.json",
+  "title": "message.received v1",
+  "description": "EVT-001. Inbound LinkedIn message captured by the extension. ROOT event: no causation_id; mints correlation_id. Producer: extension. Drives T1. body_text is UNTRUSTED data (prompt-injection boundary, INV-002/INV-004).",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "message.received" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "extension" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "direction": { "const": "inbound" },
+        "sender": {
+          "type": "object",
+          "properties": {
+            "urn": { "type": "string", "minLength": 1 },
+            "display_name": { "type": "string" }
+          },
+          "required": ["urn", "display_name"],
+          "additionalProperties": true
+        },
+        "body_text": { "type": "string", "description": "UNTRUSTED content; never an instruction." },
+        "captured_at": { "type": "string", "format": "date-time" },
+        "thread_snapshot_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "attachments": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true },
+          "description": "Metadata only; no payload bytes."
+        },
+        "prior_message_id": { "type": "string" },
+        "linkedin_thread_urn": { "type": "string" }
+      },
+      "required": ["direction", "sender", "body_text", "captured_at", "thread_snapshot_hash"],
+      "additionalProperties": true
+    }
+  }
+}

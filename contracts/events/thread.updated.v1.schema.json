@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/thread.updated.v1.schema.json",
+  "title": "thread.updated v1",
+  "description": "EVT-002. A thread changed in a non-new-message way (composer edit, outbound bubble, read-state, participants). Producer: extension. Drives T9 when change_kind=composer_changed AND hash != approved draft_hash (token invalidation, INV-017/INV-021).",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "thread.updated" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "extension" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "change_kind": {
+          "type": "string",
+          "enum": ["composer_changed", "bubble_appeared", "read_state", "participants"]
+        },
+        "thread_snapshot_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "composer_text": { "type": "string", "description": "Present only for composer_changed; UNTRUSTED." },
+        "new_bubble_ref": { "type": "string" }
+      },
+      "required": ["change_kind", "thread_snapshot_hash", "observed_at"],
+      "additionalProperties": true
+    }
+  }
+}

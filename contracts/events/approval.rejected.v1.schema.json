@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/approval.rejected.v1.schema.json",
+  "title": "approval.rejected v1",
+  "description": "EVT-008. AUTHORITY-BEARING (terminal): producer MUST be gateway (const), on an authenticated human reject. NO token is minted (decision-typed). Drives T4 (PENDING_APPROVAL->REJECTED). Enforces INV-019/INV-020.",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "approval.rejected" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "gateway" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "draft_id": { "type": "string", "minLength": 1 },
+        "decision": { "const": "reject" },
+        "approver_id": { "type": "string", "minLength": 1 },
+        "device_id": { "type": "string", "minLength": 1 },
+        "reason_code": { "type": "string", "enum": ["not_now", "wrong_tone", "factually_wrong", "other"] },
+        "reason_text": { "type": "string" },
+        "request_redraft": { "type": "boolean" }
+      },
+      "required": ["draft_id", "decision", "approver_id", "device_id", "reason_code"],
+      "additionalProperties": true
+    }
+  }
+}

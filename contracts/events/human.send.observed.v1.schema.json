@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.linkedin-copilot.local/events/human.send.observed.v1.schema.json",
+  "title": "human.send.observed v1",
+  "description": "EVT-011. PASSIVE observation that a human clicked Send (a new outbound DOM bubble). Producer: extension. Drives T8 (INJECTED->SENT_BY_HUMAN). The extension never performs the send it observes (INV-013/INV-021). Carries DOM evidence.",
+  "allOf": [
+    { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "human.send.observed" },
+        "event_version": { "const": 1 },
+        "producer": { "const": "extension" },
+        "data": { "$ref": "#/$defs/data" }
+      },
+      "required": ["causation_id", "thread_id", "message_id", "seq"]
+    }
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "draft_id": { "type": "string", "minLength": 1 },
+        "observed_outbound_message_id": { "type": "string", "minLength": 1 },
+        "observed_text_hash": { "$ref": "https://contracts.linkedin-copilot.local/envelope.schema.json#/$defs/sha256" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "evidence": {
+          "type": "object",
+          "properties": {
+            "bubble_ref": { "type": "string", "minLength": 1 },
+            "mutation_kind": { "type": "string", "minLength": 1 }
+          },
+          "required": ["bubble_ref", "mutation_kind"],
+          "additionalProperties": true
+        },
+        "latency_from_inject_ms": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["draft_id", "observed_outbound_message_id", "observed_text_hash", "observed_at", "evidence"],
+      "additionalProperties": true
+    }
+  }
+}
