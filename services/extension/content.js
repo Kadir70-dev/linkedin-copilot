@@ -238,11 +238,19 @@
       if (!text) return setStatus("No thread text. Capture or paste first.");
       const tid = threadId();
       setStatus("Sending to gateway…");
-      await call("ingest", { thread_id: tid, text });
+      const ing = await call("ingest", { thread_id: tid, text });
+      if (ing && ing.error) {
+        const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+        setStatus(m); toast(m, "err"); return;
+      }
       setStatus("AI is drafting (local Qwen)… this can take a bit.");
       // poll until PENDING_APPROVAL
       for (let i = 0; i < 90; i++) {
         const d = await call("getDraft", { thread_id: tid });
+        if (d && d.error) {
+          const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+          setStatus(m); toast(m, "err"); return;
+        }
         if (d && d.state === "PENDING_APPROVAL") {
           elDraft.style.display = "block";
           elActions.style.display = "flex";
@@ -556,10 +564,18 @@
       const nm = text.match(/^\s*Name:\s*(.+)$/im);
       const name = (nm && nm[1].trim()) || "";
       setStatusP("Sending profile to gateway…");
-      await call("profileIngest", { profile_id: pid, profile_text: text, name });
+      const ing = await call("profileIngest", { profile_id: pid, profile_text: text, name });
+      if (ing && ing.error) {
+        const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+        setStatusP(m); toast(m, "err"); return;
+      }
       setStatusP("AI is writing your outreach (local Qwen)… this can take a bit.");
       for (let i = 0; i < 90; i++) {
         const d = await call("getOutreach", { profile_id: pid });
+        if (d && d.error) {
+          const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+          setStatusP(m); toast(m, "err"); return;
+        }
         if (d && d.state === "OUTREACH_READY") {
           elOut.style.display = "block";
           elActions.style.display = "flex";
