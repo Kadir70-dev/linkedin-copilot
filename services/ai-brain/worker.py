@@ -44,11 +44,6 @@ QUEUE_THROTTLE_SEC = float(os.getenv("QUEUE_THROTTLE_SEC", "2") or 0)
 # generations in flight. Default ON. FAST_MODE (the CPU-inference proxy on this
 # stack) FORCES it on regardless — on CPU we never want concurrent generations.
 SEQUENTIAL_MODE = os.getenv("SEQUENTIAL_MODE", "true").strip().lower() in ("1", "true", "yes", "on")
-SEQUENTIAL = SEQUENTIAL_MODE or FAST_MODE
-# How many stream entries to buffer per read. 1 = strict sequential (pull one,
-# finish it, then pull the next). >1 only buffers locally — processing is serial
-# either way (ollama is pinned to NUM_PARALLEL=1) — but 1 makes the guarantee exact.
-READ_COUNT = 1 if SEQUENTIAL else 5
 
 # FAST_MODE: low-resource CPU profile (e.g. HP EliteBook 840 G1, 2C/4T Haswell).
 # Shrinks best-of-N, skips length-only regeneration, caps generated tokens, and
@@ -57,7 +52,14 @@ READ_COUNT = 1 if SEQUENTIAL else 5
 # NUM_PARALLEL=1 in docker-compose), so the CPU isn't oversubscribed. Quality
 # guarantees are UNCHANGED: hallucinated/spammy drafts still fall back to the
 # deterministic grounded note. Default off → no behavior change for other boxes.
+# NOTE: must be defined BEFORE SEQUENTIAL (which references FAST_MODE).
 FAST_MODE = os.getenv("FAST_MODE", "false").strip().lower() in ("1", "true", "yes", "on")
+
+SEQUENTIAL = SEQUENTIAL_MODE or FAST_MODE
+# How many stream entries to buffer per read. 1 = strict sequential (pull one,
+# finish it, then pull the next). >1 only buffers locally — processing is serial
+# either way (ollama is pinned to NUM_PARALLEL=1) — but 1 makes the guarantee exact.
+READ_COUNT = 1 if SEQUENTIAL else 5
 
 # MODE: vertical specialization of the outreach voice. "general" (default) keeps
 # the founder-to-founder networking voice. "fashion" switches to a B2B apparel /
@@ -351,9 +353,14 @@ BASE_FORCE_KW = (
     "purchasing", "supply chain",
 )
 # Senior-leadership title cues that promote an otherwise-general profile to premium.
+# INTENTIONALLY narrow: only true founder/CEO/owner-level leads get the premium model.
+# VP, vice president, director, head of are NOT here — they are senior but not
+# founders/CEOs; routing them to premium inflates cost and mistakes a "VP of Sales"
+# (a sales contact) for a founder peer. Per spec: CEO/Owner/Founder -> premium;
+# VP/Director/Head-of -> base model.
 GENERAL_PREMIUM_KW = (
     "ceo", "chief executive", "chief ", "founder", "co-found", "cofound", "owner",
-    "managing director", "president", "vp ", "vice president", "head of", " director",
+    "managing director", "managing partner", "president", "proprietor",
 )
 
 
@@ -1087,11 +1094,18 @@ def _headline_line(profile_text: str) -> str:
 
 
 def hermes_role_company(profile_text: str):
-    """Split role/title and company from the headline + explicit fields."""
+    """Split role/title and company from the headline + explicit fields.
+
+    Uses only ' at ' or ' @ ' as the title→company separator. Prepositions
+    like 'of' and 'for' appear INSIDE titles ("Head of Sourcing", "VP of Sales")
+    and MUST NOT be used as a split point — that would break "Head of Sourcing at
+    Zara" into role="Head" / company="Sourcing at Zara".
+    """
     head = _headline_line(profile_text)
     company = _profile_field(profile_text, "company")
     seg = re.split(r"\s*[|•·]\s*", head)[0].strip()  # first clause of the headline
-    m = re.search(r"(.+?)\s+(?:at|@|of|for|with)\s+(.+)", seg, re.I)
+    # Only split on ' at ' or ' @ ' (the unambiguous title→company separators).
+    m = re.search(r"^(.+?)\s+(?:at|@)\s+(.+)$", seg, re.I)
     if m:
         role = m.group(1).strip()
         company = company or m.group(2).strip()
