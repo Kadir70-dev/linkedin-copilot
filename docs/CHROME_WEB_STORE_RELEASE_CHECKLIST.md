@@ -2,6 +2,34 @@
 
 Status: PREPARATION ONLY; NOT READY TO PUBLISH (9 November 2026).
 
+## Branch feat/launch-ready — automated prep completed (9 November 2026)
+
+| Item | Status |
+|---|---|
+| Go gateway builds cleanly (`go build`, `go vet`) | DONE |
+| Go tests pass (`go test ./... -v -count=1`, no test files = `[no test files]`) | DONE |
+| worker.py FAST_MODE/SEQUENTIAL order bug fixed (NameError on startup) | DONE |
+| VP/founder premium-model boundary fixed (VP removed from GENERAL_PREMIUM_KW) | DONE |
+| Company extraction fixed (`hermes_role_company`: only split on 'at'/'@', not 'of') | DONE |
+| Classification tests (bench/test_classification.py): 32/32 PASS | DONE |
+| Forbidden-API grep: NO `.click()`, NO `form.submit()`, NO `keydown/Enter` in content.js | DONE |
+| Extension offline error handling: gateway unreachable shows toast+status, no silent failure | DONE |
+| Icons created: icons/icon-16.png, icons/icon-48.png, icons/icon-128.png | DONE |
+| CWS ZIP: artifacts/linkedin-copilot-v0.1.0.zip (MV3, 6 files, 19 KB) | DONE |
+| ZIP validated: manifest version=0.1.0, manifest_version=3, all icons present | DONE |
+| .gitignore: .env, *.pyc, gateway binary, artifacts all excluded | DONE |
+| No secrets/API keys in source files | DONE |
+
+## Requires owner action before publish
+
+1. **Chrome Web Store developer account** — one-time $5 registration fee at https://chrome.google.com/webstore/devconsole
+2. **Privacy policy URL** — public URL required for CWS submission; draft at docs/CHROME_WEB_STORE_PRIVACY_DRAFT.md
+3. **Real screenshots** — 1280×800 screenshots of a running extension on a real LinkedIn page (1-5 required)
+4. **128×128 promotional icon** — the auto-generated icon-128.png is a placeholder; a polished branded icon is recommended
+5. **Live LinkedIn DOM testing** — the DOM selectors in content.js (captureProfile, inviteModal, connectionNoteField, scanProfiles) must be verified against the current live LinkedIn DOM on desktop Chrome; LinkedIn obfuscates class names frequently
+6. **Ollama + Docker deployment** — the local gateway + Ollama must be running on the user's machine for the extension to function; not required for CWS submission but required for it to work
+7. **Legal/business identity** — developer name and support contact email for the CWS listing page
+
 ## Critical source-of-truth discrepancy
 
 - GitHub main still holds the 6 June 2026 legacy source at cb6c638.
