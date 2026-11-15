@@ -55,7 +55,14 @@ def verify():
     m=json.loads((EXT/"manifest.json").read_text())
     assert m.get("manifest_version")==3, "MV3 required"
     assert m.get("permissions")==["storage"], "Excess permissions"
-    assert m.get("host_permissions")==["http://localhost:8080/*"], "Gateway must be localhost"
+    bg=(EXT/"background.js").read_text()
+    gw=re.search(r'^const GATEWAY = "([^"]+)";$',bg,re.M)
+    assert gw, "GATEWAY constant missing"
+    gw=gw.group(1)
+    assert gw=="http://localhost:8080" or re.fullmatch(r"https://[a-z0-9.-]+(:\d+)?",gw), "Gateway must be localhost or one https origin"
+    assert "linkedin.com" not in gw, "Gateway must not be LinkedIn"
+    assert m.get("host_permissions")==[gw+"/*"], "host_permissions must be exactly the gateway origin"
+    assert m.get("options_ui",{}).get("page")=="options.html"
     assert m.get("content_scripts",[{}])[0].get("matches")==["https://www.linkedin.com/*"], "LinkedIn scope changed"
     assert m.get("background",{}).get("service_worker")=="background.js"
     assert m.get("name") and m.get("description") and m.get("version")
@@ -66,17 +73,20 @@ def verify():
         assert data.startswith(b"\x89PNG\r\n\x1a\n")
         assert struct.unpack(">II",data[16:24])==(size,size)
     cs=(EXT/"content.js").read_text()
-    bg=(EXT/"background.js").read_text()
     assert "chrome.runtime.sendMessage" in cs and "chrome.runtime.onMessage" in bg
-    assert "http://localhost:8080" in bg
     deny=[r"\.click\s*\(",r"\.submit\s*\(",r"\.requestSubmit\s*\(",r"new\s+KeyboardEvent\s*\(",r"\bXMLHttpRequest\b",r"\bWebSocket\s*\(",r"\bchrome\.(?:debugger|cookies|webRequest)\b",r"\beval\s*\(",r"\bfetch\s*\("]
     for line in cs.splitlines():
         line=line.split("//",1)[0].strip()
         if not line or line.startswith("*"):continue
         for rule in deny:
             assert re.search(rule,line) is None, "Forbidden content script capability: "+rule
+    opts=(EXT/"options.js").read_text()
     for bad in ("chrome.debugger","chrome.cookies","chrome.webRequest"):
-        assert bad not in bg,"Forbidden background capability"
+        assert bad not in bg and bad not in opts,"Forbidden background capability"
+    for line in opts.splitlines():
+        line=line.split("//",1)[0].strip()
+        for rule in deny:
+            assert re.search(rule,line) is None, "Forbidden options capability: "+rule
     assert not (EXT/".env").exists()
     print("PASS MV3, minimum permissions, valid icons and no send/network calls in content.js")
 
@@ -85,7 +95,7 @@ def build_zip():
     OUT.mkdir(exist_ok=True)
     name="linkedin-copilot-%s-LEGACY-PREFLIGHT.zip"%m["version"]
     dest=OUT/name
-    paths=["manifest.json","background.js","content.js"]+["icons/icon-%d.png"%n for n in SIZES]
+    paths=["manifest.json","background.js","content.js","options.html","options.js"]+["icons/icon-%d.png"%n for n in SIZES]
     with zipfile.ZipFile(dest,"w",compression=zipfile.ZIP_DEFLATED) as z:
         for path in paths:z.write(EXT/path,path)
     with zipfile.ZipFile(dest) as z:

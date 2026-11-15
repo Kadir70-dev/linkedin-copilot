@@ -1,0 +1,22 @@
+# Public HTTPS entry point for the VPS (compose profile "vps").
+# Caddy obtains and renews the TLS certificate for {$DOMAIN} automatically.
+# Only the gateway is proxied; Redis and Ollama are never reachable from here.
+# The gateway itself rejects every request without a valid access key.
+{$DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 2MB
+	}
+	reverse_proxy gateway:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+	log {
+		output stdout
+		format console
+	}
+}

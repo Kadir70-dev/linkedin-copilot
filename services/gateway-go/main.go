@@ -12,10 +12,10 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strconv"
-	"sync"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -84,6 +84,8 @@ func env(k, def string) string {
 }
 
 func main() {
+	apiTokens := loadAPITokens()
+
 	// --- SQLite ---
 	var err error
 	db, err = sql.Open("sqlite", "file:"+env("DB_PATH", "./app.db")+"?_pragma=busy_timeout(5000)")
@@ -180,7 +182,7 @@ func main() {
 
 	port := env("GATEWAY_PORT", "8080")
 	log.Printf("gateway listening on :%s", port)
-	must(http.ListenAndServe(":"+port, rateLimit(cors(mux))))
+	must(http.ListenAndServe(":"+port, rateLimit(cors(requireAuth(apiTokens, mux)))))
 }
 
 // In-memory per-client fixed-window limits. This gateway is intended to run as a
@@ -209,7 +211,7 @@ func rateLimit(next http.Handler) http.Handler {
 		if !allowRequest(client+":"+bucket, limit, time.Minute) {
 			w.Header().Set("Retry-After", "60")
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{
-				"error": "rate limit exceeded",
+				"error":               "rate limit exceeded",
 				"retry_after_seconds": 60,
 			})
 			return
@@ -482,7 +484,7 @@ func handleGetOutreach(w http.ResponseWriter, r *http.Request) {
 		"profile_id": pid, "state": state, "outreach_text": text, "style": style,
 		"style_confidence": styleConf.String,
 		"hermes":           hermesJSON.String,
-		"key_phrases": keyPhrases.String, "grounding": grounding.String,
+		"key_phrases":      keyPhrases.String, "grounding": grounding.String,
 		"personalization": personalization.String,
 	})
 }

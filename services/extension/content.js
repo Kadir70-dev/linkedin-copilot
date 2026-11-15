@@ -240,7 +240,7 @@
       setStatus("Sending to gateway…");
       const ing = await call("ingest", { thread_id: tid, text });
       if (ing && ing.error) {
-        const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+        const m = "Gateway unavailable — check the access key in the extension Options, or ask your administrator.";
         setStatus(m); toast(m, "err"); return;
       }
       setStatus("AI is drafting (local Qwen)… this can take a bit.");
@@ -248,7 +248,7 @@
       for (let i = 0; i < 90; i++) {
         const d = await call("getDraft", { thread_id: tid });
         if (d && d.error) {
-          const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+          const m = "Gateway unavailable — check the access key in the extension Options, or ask your administrator.";
           setStatus(m); toast(m, "err"); return;
         }
         if (d && d.state === "PENDING_APPROVAL") {
@@ -566,14 +566,14 @@
       setStatusP("Sending profile to gateway…");
       const ing = await call("profileIngest", { profile_id: pid, profile_text: text, name });
       if (ing && ing.error) {
-        const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+        const m = "Gateway unavailable — check the access key in the extension Options, or ask your administrator.";
         setStatusP(m); toast(m, "err"); return;
       }
       setStatusP("AI is writing your outreach (local Qwen)… this can take a bit.");
       for (let i = 0; i < 90; i++) {
         const d = await call("getOutreach", { profile_id: pid });
         if (d && d.error) {
-          const m = "Gateway unreachable — is the local gateway running on localhost:8080?";
+          const m = "Gateway unavailable — check the access key in the extension Options, or ask your administrator.";
           setStatusP(m); toast(m, "err"); return;
         }
         if (d && d.state === "OUTREACH_READY") {

@@ -63,6 +63,10 @@ services:
       RATE_LIMIT_GENERATION_RPM: ${RATE_LIMIT_GENERATION_RPM:-8}
       TRUST_PROXY: ${TRUST_PROXY:-false}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      # Caller auth: Bearer access keys (comma-separated, >=32 chars each). The
+      # gateway will not start without one unless ALLOW_NO_AUTH=true (laptop only).
+      GATEWAY_API_TOKENS: ${GATEWAY_API_TOKENS:-}
+      ALLOW_NO_AUTH: ${ALLOW_NO_AUTH:-false}
       # Reported (read-only) via GET /config + GET /stats so the extension and
       # `make doctor` can show the active model strategy + queue. Keep in sync
       # with ai-brain. No send capability is added by exposing these.
@@ -110,6 +114,27 @@ services:
       ollama:
         condition: service_healthy
 
+  # VPS only: `docker compose --profile vps up -d`. The single public service;
+  # terminates HTTPS for $DOMAIN and forwards to the authenticated gateway.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["vps"]
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      DOMAIN: ${DOMAIN:-}   # required for this profile
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - gateway
+
 volumes:
   ollama:
   gwdata:
+  caddy_data:
+  caddy_config:
