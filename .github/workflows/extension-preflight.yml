@@ -28,6 +28,8 @@ jobs:
           node --check services/extension/content.js
       - name: AI-brain classification tests (production worker.py)
         run: python3 bench/test_classification.py
+      - name: Hermes reply harness (offline)
+        run: python3 bench/test_hermes_reply.py
       - name: Safety — no forbidden send APIs in extension
         run: |
           # Grep for actual code (not comments) using send-triggering patterns.

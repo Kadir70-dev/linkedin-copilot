@@ -100,6 +100,8 @@ services:
       RAM_MIN_FREE_MB: ${RAM_MIN_FREE_MB:-1200}                     # defensive-mode threshold
       FAST_MODE: ${FAST_MODE:-false}   # low-resource CPU profile (best-of=1, token caps, fast-path)
       MODE: ${MODE:-general}           # vertical voice: general | fashion (apparel sourcing)
+      OWNER_NAME: ${OWNER_NAME:-}      # account owner name, so Hermes can tell own messages from inbound
+      REPLY_ATTEMPTS: ${REPLY_ATTEMPTS:-2}  # Hermes reply drafts tried before the safe fallback
     healthcheck:
       # Confirms the worker's deps import and Redis is reachable. Informational
       # in `docker-compose ps` / `make doctor`; auto-recovery is via restart policy.

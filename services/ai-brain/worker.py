@@ -13,6 +13,8 @@ import uuid
 import requests
 import redis
 
+import hermes_reply
+
 REDIS_ADDR = os.getenv("REDIS_ADDR", "localhost:6379")
 OLLAMA = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
@@ -74,6 +76,11 @@ IS_FASHION = MODE == "fashion"
 STREAM_INGEST = "stream:message_ingest"
 STREAM_RESULT = "stream:cognition_result"
 GROUP = "cg:ai-brain"
+
+# Reply harness: attempts per message before the safe fallback, and the account
+# owner's display name so Hermes can tell their own messages from inbound ones.
+REPLY_ATTEMPTS = int(os.getenv("REPLY_ATTEMPTS", "2") or 2)
+hermes_reply.OWNER_NAME = os.getenv("OWNER_NAME", "").strip()
 
 host, port = REDIS_ADDR.split(":")
 r = redis.Redis(host=host, port=int(port), decode_responses=True)
@@ -495,14 +502,13 @@ def retrieve_memory(state: dict) -> dict:
 
 
 def generate_draft(state: dict) -> dict:
-    prompt = (
-        f"Conversation so far:\n{state['text']}\n\n"
-        f"Detected intent: {state['intent']}\n"
-        f"Notes about me: {state['memory']}\n\n"
-        f"Draft my reply:"
-    )
-    state["draft"] = ollama_generate(prompt, num_predict=150 if FAST_MODE else 0) \
-        or "Thanks for the message — happy to chat. When works for you?"
+    # HERMES reply agent (hermes_reply.py): understands the thread, builds a strict
+    # prompt, validates every draft (no invented facts/days/links/names, no
+    # commitments, no emoji) and falls back to a fact-only reply if none passes.
+    gen = lambda prompt, system: ollama_generate(
+        prompt, system=system, temperature=0.3, num_predict=120 if FAST_MODE else 160)
+    draft, meta = hermes_reply.run(state["text"], gen, attempts=REPLY_ATTEMPTS)
+    state["draft"], state["hermes"] = draft, meta
     return state
 
 
@@ -1531,14 +1537,16 @@ def process_outreach(profile_id: str, profile_text: str, target_name: str = "", 
 
 def process(thread_id: str, text: str):
     out = GRAPH.invoke({"thread_id": thread_id, "text": text})
-    draft = out["draft"]
+    draft, meta = out["draft"], out.get("hermes") or {}
     r.xadd(STREAM_RESULT, {
         "type": "draft.generated",
         "thread_id": thread_id,
         "draft_text": draft,
+        "hermes": json.dumps(meta, ensure_ascii=False)[:4000],
         "event_id": str(uuid.uuid4()),
     })
-    print(f"[ai-brain] thread={thread_id} -> draft.generated: {draft[:80]!r}", flush=True)
+    print(f"[ai-brain] thread={thread_id} -> draft.generated source={meta.get('source')} "
+          f"attempt={meta.get('attempt')} rejected={len(meta.get('rejected') or [])}: {draft[:80]!r}", flush=True)
 
 
 def main():
