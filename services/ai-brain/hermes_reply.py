@@ -31,6 +31,9 @@ _DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "su
 _NUM_RE = re.compile(r"(?<![\w])[$€£₹]?\d[\d,.]*\s*(?:%|k|m|aed|usd|eur|dhs|pcs|units)?(?![\w])", re.I)
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+_WORDNUM_RE = re.compile(r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|"
+                         r"fifty|hundred|thousand|a few|several|couple of)\s+(?:to\s+\w+\s+)?"
+                         r"(?:days?|weeks?|months?|pieces?|pcs|units?|percent|dollars?|dirhams?)\b", re.I)
 _PHONE_RE = re.compile(r"\+?\d[\d\s-]{7,}\d")
 _EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿⭐⭕️]")
 _PREAMBLE_RE = re.compile(r"^\s*(?:(?:sure|ok|okay)[,!.]?\s*)?(?:here(?:'s| is)[^:\n]*:|(?:revised )?(?:reply|draft|response):)\s*", re.I)
@@ -95,10 +98,14 @@ def _is_owner(speaker, owner):
     return bool(s and o and s[0] == o[0])
 
 
+def _digits(n):
+    return re.sub(r"[^\d.]", "", n).strip(".")
+
+
 def _facts(text):
     t = text.lower()
     return {
-        "numbers": {n.strip().lower() for n in _NUM_RE.findall(text) if n.strip()},
+        "numbers": {_digits(n) for n in _NUM_RE.findall(text) if _digits(n)},
         "times": {x.lower().replace(" ", "") for x in _TIME_RE.findall(text)},
         "days": {d for d in _DAYS if d in t},
         "urls": {u.lower() for u in _URL_RE.findall(text)},
@@ -159,9 +166,11 @@ def validate(draft, u):
     if any(low.startswith(o) or f" {o}" in low[:40] for o in ROBOTIC_OPENERS):
         v.append("robotic opener")
     for n in _NUM_RE.findall(draft):
-        n = n.strip().lower()
-        if n and n not in f["numbers"] and n.rstrip(".,") not in f["numbers"]:
-            v.append(f"invented number '{n}'")
+        if _digits(n) and _digits(n) not in f["numbers"]:
+            v.append(f"invented number '{n.strip()}'")
+    for w in _WORDNUM_RE.findall(draft):
+        if w.lower() not in u["latest"].lower() and w.lower() not in " ".join(m for _, m in u["turns"]).lower():
+            v.append(f"invented quantity '{w}'")
     for t in _TIME_RE.findall(draft):
         if t.lower().replace(" ", "") not in f["times"]:
             v.append(f"invented time '{t}'")

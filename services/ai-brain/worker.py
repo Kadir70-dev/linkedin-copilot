@@ -448,6 +448,10 @@ def ollama_generate(prompt: str, system: str = SYSTEM, temperature: float = 0.4,
         ollama_unload(_last_model)
     _last_model = model
     try:
+        if thinking:
+            # Thinking-capable Qwen (qwen3 / qwen3.5): ChatOllama cannot switch
+            # thinking off, so go straight to the HTTP path with think=false.
+            raise RuntimeError("thinking model: using /api/generate with think=false")
         from langchain_ollama import ChatOllama
         kw = {"model": model, "base_url": OLLAMA, "temperature": temperature}
         if np:
@@ -455,12 +459,14 @@ def ollama_generate(prompt: str, system: str = SYSTEM, temperature: float = 0.4,
         llm = ChatOllama(**kw)
         return strip_thinking(llm.invoke(f"{sys_prompt}\n\n{prompt}").content.strip())
     except Exception as e:  # lib/version issues must never break the demo
-        print(f"[ai-brain] ChatOllama unavailable ({e}); using HTTP fallback", flush=True)
-        body = {"model": model, "prompt": f"{sys_prompt}\n\n{prompt}", "stream": False}
+        if not thinking:
+            print(f"[ai-brain] ChatOllama unavailable ({e}); using HTTP fallback", flush=True)
+        body = {"model": model, "prompt": f"{sys_prompt}\n\n{prompt}", "stream": False,
+                "options": {"temperature": temperature}}
         if thinking:
             body["think"] = False
         if np:
-            body["options"] = {"num_predict": np}
+            body["options"]["num_predict"] = np
         resp = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=300)
         resp.raise_for_status()
         return strip_thinking(resp.json().get("response", "").strip())
