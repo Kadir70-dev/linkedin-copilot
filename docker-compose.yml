@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -28,7 +28,7 @@ services:
     mem_limit: 6g
     mem_reservation: 1g
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama:/root/.ollama
     environment:
@@ -69,7 +69,7 @@ services:
       PREMIUM_ROUTING: ${PREMIUM_ROUTING:-true}
       SEQUENTIAL_MODE: ${SEQUENTIAL_MODE:-true}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - gwdata:/data
     depends_on:
