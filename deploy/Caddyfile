@@ -9,6 +9,13 @@
 	}
 	# Extension downloads (no secrets inside). Files use unguessable names;
 	# no directory listing.
+	# Mobile page (iPhone/Android): paste a message, get a draft, copy it.
+	# Static, no secrets; the user's access key stays in their browser.
+	redir /m /m/
+	handle_path /m/* {
+		root * /srv/m
+		file_server
+	}
 	handle_path /dl/* {
 		root * /srv/dl
 		file_server
