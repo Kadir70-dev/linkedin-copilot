@@ -1,272 +1,264 @@
-"""Classification test fixtures for worker.py.
+"""Classification tests that import and exercise the PRODUCTION worker.py functions.
 
-Tests:
-  1. VP/founder premium-model boundary (VP -> base, CEO/Founder -> premium)
-  2. "Head of Sourcing at X" company extraction
-  3. Sourcing titles -> base model
-  4. CEO -> premium model
-  5. detect_style priority ladder
+No copies, no adapts — the actual detect_style, is_premium_profile,
+hermes_role_company, grounded_set, _is_grounded, and grounding_check from
+services/ai-brain/worker.py are imported directly.
 
 Run from the repo root:
     python3 bench/test_classification.py
+
+Requirements: none beyond the standard library (redis/requests are only used
+inside the main() consumer loop, which is guarded by __name__=="__main__").
 """
-import sys
 import os
-import re
+import sys
+
+# Point at the production module; set env-vars before import so module-level
+# constants (IS_FASHION, FAST_MODE, SEQUENTIAL, …) initialise cleanly without
+# a live Redis or Ollama instance.
+os.environ.setdefault("REDIS_ADDR", "localhost:6379")
+os.environ.setdefault("OLLAMA_BASE_URL", "http://localhost:11434")
+os.environ.setdefault("MODE", "fashion")        # test both fashion and general paths
+os.environ.setdefault("FAST_MODE", "false")
+os.environ.setdefault("SEQUENTIAL_MODE", "true")
+os.environ.setdefault("PREMIUM_ROUTING", "true")
+os.environ.setdefault("RAM_MIN_FREE_MB", "0")   # disable RAM watchdog in tests
+
+_HERE = os.path.dirname(__file__)
+sys.path.insert(0, os.path.join(_HERE, "..", "services", "ai-brain"))
+
+import worker  # noqa: E402  — must come after sys.path insert
 
 # ---------------------------------------------------------------------------
-# Inline the primitives under test so this file runs without installing the
-# ai-brain dependencies (no redis/langchain/ollama required).
+# Test harness
 # ---------------------------------------------------------------------------
 
-# --- copied / adapted from services/ai-brain/worker.py ---
-
-FOUNDER_KW = (
-    "founder", "co-founder", "cofounder", "co founder", "founding partner",
-    "ceo", "chief executive", "chief ", "owner", "co-owner", "managing director",
-    "managing partner", "president", "chairman", "chairwoman", "entrepreneur",
-)
-TALENT_KW = (
-    "recruit", "recruiter", "recruitment", "talent", "talent acquisition",
-    "talent advisory", "staffing", "executive search", "headhunt", "head hunt",
-    "people consulting", "people & culture", "people and culture", "human resources",
-    " hr ", "hr ", "talent partner",
-)
-SOURCING_KW = (
-    "buyer", "buying", "purchasing", "sourcing", "procure", "procurement",
-    "merchandis", "supply chain", "head of sourcing", "sourcing manager",
-)
-APPAREL_KW = (
-    "apparel", "fashion", "garment", "textile", "clothing", "private label",
-    "wholesale", "knitwear", "footwear", "fabric", "sewing", "boutique",
-)
-HIRING_KW = ("we're hiring", "were hiring", "we are hiring", "open role", "join our team", "now hiring")
-PARTNERSHIP_KW = ("partnership", "bizdev", "business development")
-SALES_KW = ("account executive", " ae ", "revenue", "quota", "sales ")
-NEVER_SOURCING_KW = FOUNDER_KW + TALENT_KW + ("advisory", "advisor", "consulting", "consultant")
-
-# PREMIUM routing (matches the fixed version)
-GENERAL_PREMIUM_KW = (
-    "ceo", "chief executive", "chief ", "founder", "co-found", "cofound", "owner",
-    "managing director", "managing partner", "president", "proprietor",
-)
-NON_PREMIUM_STYLES = ("recruiter", "sourcing", "sales")
-BASE_FORCE_KW = (
-    "buyer", "buying", "sourcing", "merchandis", "procure", "procurement",
-    "purchasing", "supply chain",
-)
-PREMIUM_STYLES = ("founder",)
+passed = failed = 0
 
 
-def _blocks_sourcing(t: str) -> bool:
-    return any(k in t for k in NEVER_SOURCING_KW)
-
-
-def detect_style(profile_text: str):
-    t = " " + (profile_text or "").lower() + " "
-    # 1) Founder / C-level
-    if any(k in t for k in FOUNDER_KW):
-        return "founder", "high"
-    # 2) Recruiter / talent / advisory
-    if any(k in t for k in TALENT_KW):
-        return "recruiter", "high"
-    # 3) Buyer / sourcing / merchandising
-    if any(k in t for k in SOURCING_KW) and not _blocks_sourcing(t):
-        return "sourcing", "high"
-    # 4) Secondary signals
-    if any(k in t for k in HIRING_KW):
-        return "hiring", "medium"
-    if any(k in t for k in PARTNERSHIP_KW):
-        return "partnership", "medium"
-    if any(k in t for k in SALES_KW):
-        return "sales", "medium"
-    return "networking", "low"
-
-
-def is_premium_profile(style: str, profile_text: str) -> bool:
-    t = (profile_text or "").lower()
-    if style in NON_PREMIUM_STYLES or any(k in t for k in BASE_FORCE_KW):
-        return False
-    if style in PREMIUM_STYLES:
-        return True
-    return any(k in t for k in GENERAL_PREMIUM_KW)
-
-
-def _profile_field(profile_text: str, label: str) -> str:
-    m = re.search(rf"(?im)^\s*{label}\s*:\s*(.+)$", profile_text or "")
-    return m.group(1).strip() if m else ""
-
-
-def _headline_line(profile_text: str) -> str:
-    h = _profile_field(profile_text, "headline")
-    if h:
-        return h
-    for ln in (profile_text or "").splitlines():
-        s = ln.strip()
-        if s and not re.match(r"\s*(name|company|location|about|context|mutual|headline)\s*:", s, re.I):
-            return s
-    return ""
-
-
-def hermes_role_company(profile_text: str):
-    """Fixed version: only split on ' at ' / ' @ ' (not 'of'/'for'/'with')."""
-    head = _headline_line(profile_text)
-    company = _profile_field(profile_text, "company")
-    seg = re.split(r"\s*[|•·]\s*", head)[0].strip()
-    m = re.search(r"^(.+?)\s+(?:at|@)\s+(.+)$", seg, re.I)
-    if m:
-        role = m.group(1).strip()
-        company = company or m.group(2).strip()
+def expect(label: str, got, expected):
+    global passed, failed
+    ok = got == expected
+    status = "PASS" if ok else "FAIL"
+    if ok:
+        passed += 1
     else:
-        role = seg
-    return role[:80], (company or "")[:80]
+        failed += 1
+        print(f"  FAIL  {label!r}: expected {expected!r}, got {got!r}")
+    print(f"  {status}  {label}")
 
 
-# ---------------------------------------------------------------------------
-# Test runner
-# ---------------------------------------------------------------------------
-
-PASS = 0
-FAIL = 0
-
-
-def check(name: str, actual, expected, msg: str = ""):
-    global PASS, FAIL
-    if actual == expected:
-        print(f"  PASS  {name}")
-        PASS += 1
+def expect_not(label: str, got, bad):
+    global passed, failed
+    ok = got != bad
+    status = "PASS" if ok else "FAIL"
+    if ok:
+        passed += 1
     else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        actual  : {actual!r}")
-        if msg:
-            print(f"        note    : {msg}")
-        FAIL += 1
+        failed += 1
+        print(f"  FAIL  {label!r}: expected NOT {bad!r}, got {got!r}")
+    print(f"  {status}  {label}")
+
+
+def section(title: str):
+    print(f"\n=== {title} ===")
 
 
 # ---------------------------------------------------------------------------
-# 1. VP/founder premium-model boundary
+# 1. VP / founder boundary (the core regression the reviewer flagged)
 # ---------------------------------------------------------------------------
-print("\n=== 1. VP/founder premium-model boundary ===")
+section("1. VP / founder boundary — 'Vice President' must NOT be founder")
 
-# VP of Sales -> style='sales' via detect_style -> NOT premium
-vp_sales_profile = "Name: John\nHeadline: VP of Sales at Acme"
-vp_style, _ = detect_style(vp_sales_profile)
-check("VP of Sales detected style", vp_style, "sales")
-check("VP of Sales is NOT premium", is_premium_profile(vp_style, vp_sales_profile), False)
+vp_sales = "Vice President of Sales at TechCorp"
+style_vp, _ = worker.detect_style(vp_sales)
+expect("'Vice President of Sales' style is NOT founder", style_vp == "founder", False)
+expect("'Vice President of Sales' style is 'sales'", style_vp, "sales")
 
-# VP of Engineering (no sales keyword -> networking, but still NOT premium since vp removed)
-vp_eng_profile = "Name: Alice\nHeadline: VP of Engineering at TechCorp"
-vp_eng_style, _ = detect_style(vp_eng_profile)
-check("VP of Engineering is NOT premium (vp removed from GENERAL_PREMIUM_KW)",
-      is_premium_profile(vp_eng_style, vp_eng_profile), False)
+vp_eng = "Vice President of Engineering"
+style_vp_eng, _ = worker.detect_style(vp_eng)
+expect_not("'Vice President of Engineering' is NOT founder", style_vp_eng, "founder")
 
-# Director of Product -> NOT premium
-dir_profile = "Name: Bob\nHeadline: Director of Product at StartupX"
-dir_style, _ = detect_style(dir_profile)
-check("Director of Product is NOT premium", is_premium_profile(dir_style, dir_profile), False)
+vp_abbrev = "VP of Sales | Helping teams hit quota"
+style_vp2, _ = worker.detect_style(vp_abbrev)
+expect("'VP of Sales' style is NOT founder", style_vp2 == "founder", False)
 
-# Head of Sourcing -> detect_style=sourcing -> NOT premium (sourcing style + base_force_kw)
-hos_profile = "Name: Jane\nHeadline: Head of Sourcing at Zara"
-hos_style, _ = detect_style(hos_profile)
-check("Head of Sourcing detected style", hos_style, "sourcing")
-check("Head of Sourcing is NOT premium", is_premium_profile(hos_style, hos_profile), False)
+president_alone = "President at Acme Holdings"
+style_pres, _ = worker.detect_style(president_alone)
+expect("Standalone 'President' IS founder", style_pres, "founder")
 
-# CEO -> style=founder -> IS premium
-ceo_profile = "Name: Sarah\nHeadline: CEO at GreenTech"
-ceo_style, _ = detect_style(ceo_profile)
-check("CEO detected style", ceo_style, "founder")
-check("CEO IS premium", is_premium_profile(ceo_style, ceo_profile), True)
-
-# Founder -> style=founder -> IS premium
-founder_profile = "Name: Mike\nHeadline: Founder at Noor Apparel | Private Label"
-founder_style, _ = detect_style(founder_profile)
-check("Founder detected style", founder_style, "founder")
-check("Founder IS premium", is_premium_profile(founder_style, founder_profile), True)
+ceo = "CEO & Founder at StartupCo"
+style_ceo, _ = worker.detect_style(ceo)
+expect("'CEO & Founder' IS founder", style_ceo, "founder")
 
 # ---------------------------------------------------------------------------
-# 2. Company extraction from headline with "at X" suffix
+# 2. is_premium_profile: VP -> base, CEO/Founder -> premium
 # ---------------------------------------------------------------------------
-print("\n=== 2. Company extraction ('Head of Sourcing at Zara') ===")
+section("2. is_premium_profile — VP stays base, CEO/Founder go premium")
 
-role, company = hermes_role_company("Name: Jane\nHeadline: Head of Sourcing at Zara")
-check("Head of Sourcing at Zara - role", role, "Head of Sourcing")
-check("Head of Sourcing at Zara - company", company, "Zara")
-
-role, company = hermes_role_company("Name: John\nHeadline: VP of Sales at Acme Corp")
-check("VP of Sales at Acme Corp - role", role, "VP of Sales")
-check("VP of Sales at Acme Corp - company", company, "Acme Corp")
-
-role, company = hermes_role_company("Name: Ali\nHeadline: Director of Procurement at GulfTex")
-check("Director of Procurement at GulfTex - role", role, "Director of Procurement")
-check("Director of Procurement at GulfTex - company", company, "GulfTex")
-
-role, company = hermes_role_company("Name: Sarah\nHeadline: Founder at Noor Apparel")
-check("Founder at Noor Apparel - role", role, "Founder")
-check("Founder at Noor Apparel - company", company, "Noor Apparel")
-
-# No 'at': role only
-role, company = hermes_role_company("Name: X\nHeadline: CEO")
-check("CEO (no at) - role", role, "CEO")
-check("CEO (no at) - company", company, "")
+expect(
+    "'Vice President of Sales' NOT premium",
+    worker.is_premium_profile("sales", "Vice President of Sales at TechCorp"),
+    False,
+)
+expect(
+    "'VP of Engineering' NOT premium",
+    worker.is_premium_profile("networking", "VP of Engineering"),
+    False,
+)
+expect(
+    "'CEO & Founder' IS premium",
+    worker.is_premium_profile("founder", "CEO & Founder at StartupCo"),
+    True,
+)
+expect(
+    "'Owner at FamilyBiz' IS premium",
+    worker.is_premium_profile("founder", "Owner at FamilyBiz"),
+    True,
+)
+expect(
+    "Standalone 'President' IS premium",
+    worker.is_premium_profile("founder", "President at Acme Holdings"),
+    True,
+)
+expect(
+    "'Managing Director' IS premium",
+    worker.is_premium_profile("founder", "Managing Director at Dubai Investments"),
+    True,
+)
+expect(
+    "sourcing style is NEVER premium",
+    worker.is_premium_profile("sourcing", "Head of Sourcing at Zara"),
+    False,
+)
 
 # ---------------------------------------------------------------------------
-# 3. Sourcing titles -> base model (never premium)
+# 3. Company extraction: "Head of Sourcing at Zara" -> role + company
 # ---------------------------------------------------------------------------
-print("\n=== 3. Sourcing titles -> base model ===")
+section("3. hermes_role_company — 'at X' split, not 'of X'")
+
+role, company = worker.hermes_role_company("Head of Sourcing at Zara")
+expect("'Head of Sourcing at Zara' role", role, "Head of Sourcing")
+expect("'Head of Sourcing at Zara' company", company, "Zara")
+
+role2, company2 = worker.hermes_role_company("VP of Sales @ Acme")
+expect("'VP of Sales @ Acme' role", role2, "VP of Sales")
+expect("'VP of Sales @ Acme' company", company2, "Acme")
+
+# 'for' is intentionally NOT a split separator (too ambiguous: "Buyer for Fashion"
+# could mean the buyer's category, not their employer).  Full title returned as role.
+role3, company3 = worker.hermes_role_company("Buyer for Fashion House")
+expect("'Buyer for Fashion House' role (no split on 'for')", role3, "Buyer for Fashion House")
+expect("'Buyer for Fashion House' company (empty — no unambiguous separator)", company3, "")
+
+role4, company4 = worker.hermes_role_company("Founder")
+expect("'Founder' (no company) role", role4, "Founder")
+expect("'Founder' (no company) company", company4, "")
+
+# ---------------------------------------------------------------------------
+# 4. Sourcing titles -> base model routing
+# ---------------------------------------------------------------------------
+section("4. Sourcing titles use base model, never premium")
 
 sourcing_profiles = [
-    ("Head of Sourcing at Zara", "Head of Sourcing at Zara"),
-    ("Buyer", "Fashion Buyer"),
-    ("Procurement Manager at TextileCo", "Procurement Manager at TextileCo"),
-    ("Merchandising Director at H&M", "Merchandising Director at H&M"),
-    ("Supply Chain Lead", "Supply Chain Lead"),
+    "Head of Sourcing at Zara",
+    "Sourcing Manager | Apparel & Textiles",
+    "Senior Buyer, Footwear Division",
+    "Procurement Director — Fashion Retail",
+    "Merchandising Lead at H&M",
 ]
-for desc, headline in sourcing_profiles:
-    p = f"Name: X\nHeadline: {headline}"
-    s, _ = detect_style(p)
-    premium = is_premium_profile(s, p)
-    check(f"'{desc}' is NOT premium (style={s})", premium, False)
+for p in sourcing_profiles:
+    s, _ = worker.detect_style(p)
+    premium = worker.is_premium_profile(s, p)
+    expect(f"{p!r} NOT premium", premium, False)
 
 # ---------------------------------------------------------------------------
-# 4. CEO uses premium model
+# 5. CEO / founder-specific profiles use premium
 # ---------------------------------------------------------------------------
-print("\n=== 4. CEO uses premium model ===")
+section("5. CEO / Founder profiles route to premium model")
 
-ceo_cases = [
-    "CEO at TechStartup",
-    "Chief Executive Officer at MegaCorp",
-    "Co-Founder & CEO at AppBuilders",
-    "Founder and CEO",
-    "Owner at FamilyBiz",
-    "Managing Director at Dubai Investments",
+founder_profiles = [
+    ("Founder and CEO", "founder"),
+    ("Co-Founder at BuildCo", "founder"),
+    ("Owner at FamilyBiz", "founder"),
+    ("Managing Director at Dubai Investments", "founder"),
+    ("Entrepreneur | Building in Stealth", "founder"),
+    ("Chairman at XYZ Holdings", "founder"),
 ]
-for headline in ceo_cases:
-    p = f"Name: X\nHeadline: {headline}"
-    s, _ = detect_style(p)
-    premium = is_premium_profile(s, p)
-    check(f"'{headline}' IS premium (style={s})", premium, True)
+for profile, expected_style in founder_profiles:
+    s, _ = worker.detect_style(profile)
+    expect(f"{profile!r} style={expected_style}", s, expected_style)
+    premium = worker.is_premium_profile(s, profile)
+    expect(f"{profile!r} IS premium", premium, True)
 
 # ---------------------------------------------------------------------------
-# 5. SEQUENTIAL/FAST_MODE import order (regression test for the NameError bug)
+# 6. "Founder & VP of Sales" — founder wins (explicit founder keyword)
 # ---------------------------------------------------------------------------
-print("\n=== 5. SEQUENTIAL/FAST_MODE definition order ===")
-# Simulate the fixed order: FAST_MODE defined BEFORE it is used in SEQUENTIAL
-_FAST_MODE = False
-_SEQUENTIAL_MODE = True
-try:
-    _SEQUENTIAL = _SEQUENTIAL_MODE or _FAST_MODE  # references _FAST_MODE already defined
-    check("FAST_MODE defined before SEQUENTIAL (no NameError)", True, True)
-except NameError as e:
-    check("FAST_MODE defined before SEQUENTIAL (no NameError)", False, True, str(e))
+section("6. Explicit founder + VP combination -> founder wins")
+
+combined = "Founder & VP of Sales at GrowthCo"
+style_combined, _ = worker.detect_style(combined)
+expect("'Founder & VP of Sales' IS founder (founder wins)", style_combined, "founder")
+expect(
+    "'Founder & VP of Sales' IS premium",
+    worker.is_premium_profile(style_combined, combined),
+    True,
+)
 
 # ---------------------------------------------------------------------------
-# Summary
+# 7. Grounding: _is_grounded stricter than 4-char prefix
 # ---------------------------------------------------------------------------
-print(f"\n{'='*50}")
-print(f"Results: {PASS} passed, {FAIL} failed")
-if FAIL:
-    sys.exit(1)
-else:
+section("7. _is_grounded — no 4-char prefix false positives")
+
+grounded = worker.grounded_set("sustainable fashion brand at Zara", "Lara")
+# "sustainability" should NOT be grounded from "sustainable" (7/14 = 0.50 < 0.80)
+expect(
+    "'sustainability' NOT grounded from 'sustainable'",
+    worker._is_grounded("sustainability", grounded),
+    False,
+)
+# "sustain" is in "sustainable" and 7/11 = 0.636 < 0.80 — not grounded
+expect(
+    "'sustain' NOT grounded from 'sustainable'",
+    worker._is_grounded("sustain", grounded),
+    False,
+)
+# "brands" IS grounded from "brand" (5/6 = 0.833 >= 0.80)
+expect(
+    "'brands' IS grounded from 'brand'",
+    worker._is_grounded("brands", grounded),
+    True,
+)
+# "fashionable" should NOT be grounded from "fashion" (6/11 = 0.545 < 0.80)
+expect(
+    "'fashionable' NOT grounded from 'fashion'",
+    worker._is_grounded("fashionable", grounded),
+    False,
+)
+# exact match always works
+expect(
+    "'fashion' IS grounded (exact)",
+    worker._is_grounded("fashion", grounded),
+    True,
+)
+
+# ---------------------------------------------------------------------------
+# 8. FAST_MODE defined before SEQUENTIAL (NameError regression guard)
+# ---------------------------------------------------------------------------
+section("8. Module-level definition order (FAST_MODE before SEQUENTIAL)")
+
+# If the NameError regression existed, the import above would have already failed.
+# This just asserts the final values are readable.
+expect("FAST_MODE is bool", isinstance(worker.FAST_MODE, bool), True)
+expect("SEQUENTIAL is bool", isinstance(worker.SEQUENTIAL, bool), True)
+expect("SEQUENTIAL = SEQUENTIAL_MODE or FAST_MODE", worker.SEQUENTIAL, worker.SEQUENTIAL_MODE or worker.FAST_MODE)
+
+# ---------------------------------------------------------------------------
+# Results
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 50)
+print(f"Results: {passed} passed, {failed} failed")
+if failed == 0:
     print("All tests PASSED.")
-    sys.exit(0)
+else:
+    print("FAILURES — see above.")
+    sys.exit(1)

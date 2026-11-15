@@ -1,7 +1,7 @@
 name: Chrome Extension Release Preflight
 on:
   push:
-    branches: ['release/**']
+    branches: ['release/**', 'feat/**']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -17,10 +17,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python test dependencies
+        run: pip install redis requests
       - name: JavaScript syntax
         run: |
           node --check services/extension/background.js
           node --check services/extension/content.js
+      - name: AI-brain classification tests (production worker.py)
+        run: python3 bench/test_classification.py
+      - name: Safety — no forbidden send APIs in extension
+        run: |
+          # Grep for actual code (not comments) using send-triggering patterns.
+          # Strips comment lines before searching so the safety disclaimer comment
+          # in the file header does not produce a false positive.
+          grep -v '^\s*//' services/extension/content.js \
+            | grep -v '^\s*\*' \
+            | grep -qE "sendButton|\.click\(\)|form\.submit\(\)|\.submit\(\)" \
+            && echo "FORBIDDEN auto-send pattern found!" && exit 1 \
+            || echo "Safety check: CLEAN"
+      - name: Go gateway build
+        run: |
+          cd services/gateway-go
+          go build ./...
+          go vet ./...
       - name: Generate icons, verify safety and package
         run: python3 scripts/prepare_cws.py
       - name: Validate artifact

@@ -370,10 +370,11 @@ def is_premium_profile(style: str, profile_text: str) -> bool:
     # title like "Director of Sourcing" does not make it a premium founder lead).
     if style in NON_PREMIUM_STYLES or any(k in t for k in BASE_FORCE_KW):
         return False
-    # Founders/CEOs/directors/owners/VPs -> premium.
+    # Founders/CEOs/owners -> premium. Use _mask_non_founder so "vice president"
+    # doesn't trigger the "president" keyword in GENERAL_PREMIUM_KW.
     if style in PREMIUM_STYLES:
         return True
-    return any(k in t for k in GENERAL_PREMIUM_KW)
+    return any(k in _mask_non_founder(t) for k in GENERAL_PREMIUM_KW)
 
 
 def model_for(style: str, profile_text: str):
@@ -537,6 +538,29 @@ FOUNDER_KW = (
     "ceo", "chief executive", "chief ", "owner", "co-owner", "managing director",
     "managing partner", "president", "chairman", "chairwoman", "entrepreneur",
 )
+# Titles that contain a FOUNDER_KW substring but are NOT founder-tier.
+# Must be checked BEFORE FOUNDER_KW to prevent substring ambiguity:
+#   "vice president" contains "president", "VP of Sales" abbreviates it.
+# These titles are senior contacts (use base model) not founder peers.
+NOT_FOUNDER_KW = (
+    "vice president", "vice-president", "vp of", "vp,", "vp ",
+    " vp", "deputy president", "assistant president", "associate president",
+    "past president", "former president", "ex-president",
+)
+
+
+def _mask_non_founder(t: str) -> str:
+    """Remove NOT_FOUNDER_KW phrases from t before FOUNDER_KW matching so that
+    'vice president' cannot match 'president' as a substring."""
+    for phrase in NOT_FOUNDER_KW:
+        t = t.replace(phrase, " ")
+    return t
+
+
+def _is_founder_title(t: str) -> bool:
+    """True iff the profile text carries a genuine founder/CEO-tier keyword.
+    Strips non-founder prefixes (vice president, etc.) first."""
+    return any(k in _mask_non_founder(t) for k in FOUNDER_KW)
 # Recruiter / talent / advisory / staffing / people roles -> `recruiter` style.
 TALENT_KW = (
     "recruit", "recruiter", "recruitment", "talent", "talent acquisition",
@@ -562,7 +586,8 @@ NEVER_SOURCING_KW = FOUNDER_KW + TALENT_KW + ("advisory", "advisor", "consulting
 
 
 def _blocks_sourcing(t: str) -> bool:
-    return any(k in t for k in NEVER_SOURCING_KW)
+    # Use _is_founder_title so "vice president" doesn't block sourcing via "president".
+    return _is_founder_title(t) or any(k in t for k in TALENT_KW + ("advisory", "advisor", "consulting", "consultant"))
 
 
 def is_apparel_profile(profile_text: str) -> bool:
@@ -588,7 +613,8 @@ def detect_style(profile_text: str):
     t = " " + (profile_text or "").lower() + " "
     blocks = _blocks_sourcing(t)
     # 1) Founder / C-level (highest priority — wins even alongside "talent advisory").
-    if any(k in t for k in FOUNDER_KW):
+    # Uses _is_founder_title to avoid "vice president" matching "president" substring.
+    if _is_founder_title(t):
         return "founder", "high"
     # 2) Recruiter / talent / advisory / staffing / people.
     if any(k in t for k in TALENT_KW):
@@ -846,10 +872,18 @@ def grounded_set(profile: str, name: str):
 def _is_grounded(w: str, grounded: set) -> bool:
     if w in grounded:
         return True
-    if len(w) >= 4:  # tolerate inflection: brand/brands, design/designer
+    if len(w) >= 5:
+        # Tolerate close inflections (plural, past-tense, gerund) where one word is
+        # a true substring of the other AND the shared root covers ≥ 80% of the
+        # longer form.  This blocks shallow 4-char-prefix false-positives such as
+        # "sustain"→"sustainability" (7/14 = 0.50) while still accepting
+        # "brand"→"brands" (5/6 = 0.83) or "design"→"designs" (6/7 = 0.86).
         for g in grounded:
-            if len(g) >= 4 and (w[:4] == g[:4] or w in g or g in w):
-                return True
+            if len(g) >= 5 and (w in g or g in w):
+                shorter = min(len(w), len(g))
+                longer = max(len(w), len(g))
+                if shorter / longer >= 0.80:
+                    return True
     return False
 
 
