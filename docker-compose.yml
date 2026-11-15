@@ -102,6 +102,10 @@ services:
       MODE: ${MODE:-general}           # vertical voice: general | fashion (apparel sourcing)
       OWNER_NAME: ${OWNER_NAME:-}      # account owner name, so Hermes can tell own messages from inbound
       REPLY_ATTEMPTS: ${REPLY_ATTEMPTS:-2}  # Hermes reply drafts tried before the safe fallback
+      # Optional Claude engine: set ANTHROPIC_API_KEY to use Claude first, local Qwen as backup.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-opus-5-5}
+      CLAUDE_EFFORT: ${CLAUDE_EFFORT:-low}
     healthcheck:
       # Confirms the worker's deps import and Redis is reachable. Informational
       # in `docker-compose ps` / `make doctor`; auto-recovery is via restart policy.

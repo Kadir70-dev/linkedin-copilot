@@ -13,6 +13,7 @@ import uuid
 import requests
 import redis
 
+import claude_llm
 import hermes_reply
 
 REDIS_ADDR = os.getenv("REDIS_ADDR", "localhost:6379")
@@ -476,7 +477,13 @@ def generate_with_fallback(prompt: str, system: str, temperature: float,
                            num_predict: int, model: str) -> str:
     """Generate on `model`, but if it fails for ANY reason (not pulled, load error,
     OOM during load, timeout) transparently retry on the base model so a draft is
-    always produced and the ai-brain never crashes. Returns "" only if both fail."""
+    always produced and the ai-brain never crashes. Returns "" only if both fail.
+    When ANTHROPIC_API_KEY is set, Claude is tried first and Qwen is the backup."""
+    if claude_llm.enabled():
+        try:
+            return claude_llm.generate(prompt, system)
+        except Exception as e:
+            print(f"[ai-brain] claude failed ({type(e).__name__}: {str(e)[:120]}); using local {model}", flush=True)
     try:
         return ollama_generate(prompt, system=system, temperature=temperature,
                                num_predict=num_predict, model=model)
@@ -511,8 +518,8 @@ def generate_draft(state: dict) -> dict:
     # HERMES reply agent (hermes_reply.py): understands the thread, builds a strict
     # prompt, validates every draft (no invented facts/days/links/names, no
     # commitments, no emoji) and falls back to a fact-only reply if none passes.
-    gen = lambda prompt, system: ollama_generate(
-        prompt, system=system, temperature=0.3, num_predict=120 if FAST_MODE else 160)
+    gen = lambda prompt, system: generate_with_fallback(
+        prompt, system, 0.3, 120 if FAST_MODE else 160, BASE_MODEL)
     draft, meta = hermes_reply.run(state["text"], gen, attempts=REPLY_ATTEMPTS)
     state["draft"], state["hermes"] = draft, meta
     return state
@@ -1572,7 +1579,7 @@ def main():
           f"premium={PREMIUM_MODEL if PREMIUM_ROUTING else 'off'} mode={MODE} "
           f"fast={FAST_MODE} sequential={SEQUENTIAL} (read_count={READ_COUNT}) "
           f"ram_min_free={RAM_MIN_FREE_MB}MB free_now={host_free_mb()}MB "
-          f"ollama={OLLAMA}", flush=True)
+          f"ollama={OLLAMA} claude={claude_llm.CLAUDE_MODEL + '/' + claude_llm.CLAUDE_EFFORT if claude_llm.enabled() else 'off'}", flush=True)
 
     while True:
         try:
