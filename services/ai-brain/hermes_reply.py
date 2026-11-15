@@ -43,11 +43,10 @@ _META_LEAK_RE = re.compile(r"\b(?:revised draft|draft reply|as an ai|language mo
 ROBOTIC_OPENERS = ("acknowledged", "noted", "as an ai", "certainly!", "i hope this message finds you",
                    "hope you're doing well", "hope you are doing well", "thank you for reaching out",
                    "dear sir", "dear madam", "greetings")
-COMMIT_PHRASES = ("works for me", "work for me", "works for us", "work for us", "confirmed", "see you on", "see you at", "booked", "i've scheduled",
-                  "i have scheduled", "i'll send", "i will send", "attached", "i've attached",
+COMMIT_PHRASES = ("works for me", "work for me", "works for us", "work for us", "confirmed", "see you on",
+                  "see you at", "booked", "i've scheduled", "i have scheduled", "attached", "i've attached",
                   "deal", "agreed", "i accept", "i'm free", "i am free", "i'm available", "i am available",
-                  "i can do", "i can send", "i'll share", "i will share", "i can share", "sending it now",
-                  "i'll call", "i will call")
+                  "i can do", "sending it now", "i'll call", "i will call")
 MIN_WORDS, MAX_WORDS = 6, 70
 
 SYSTEM = (
@@ -203,7 +202,7 @@ def validate(draft, u):
     if u["last_is_owner"]:
         own = set(re.findall(r"[a-z']{3,}", u["turns"][-1][1].lower()))
         mine = set(re.findall(r"[a-z']{3,}", low))
-        if re.match(r"^(?:thanks|thank you|great|sounds good)", low) or (mine and len(mine & own) / len(mine) > 0.5):
+        if mine and len(mine & own) / len(mine) > 0.5:
             v.append("repeats or answers the owner's own message")
     return v
 

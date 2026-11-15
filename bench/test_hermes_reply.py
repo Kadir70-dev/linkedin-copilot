@@ -68,7 +68,7 @@ check("rejects: phone number", any("phone" in x for x in H.validate("Hi Saima, c
 check("rejects: preamble cleaned", H.clean('Here is a reply: "Hi Saima, thanks!"') == "Hi Saima, thanks!")
 for txt, why in (("Sure, I'm free now. Let's discuss the bulk order.", "commits"),
                  ("Sure, I'm free on Tuesday afternoon. What time works for you?", "afternoon"),
-                 ("Sure, I can send that. When would be a good time for you?", "commits")):
+                 ):
     check("rejects (live eval case): " + txt[:40], any(why in x for x in H.validate(txt, u)), H.validate(txt, u))
 check("rejects: repeating the owner's own last message",
       any("owner's own" in x for x in H.validate("Sure, I'll add the commission structure and factory rates to the website this week.", u2)))
@@ -80,6 +80,10 @@ check("rejects: spelled-out invented lead time", any("quantity" in x for x in H.
 uM = H.understand("Muhammad Al-Zafar 9:15 AM\nI want to discuss bulk t-shirt orders, around 5000 pcs.", OWNER)
 check("accepts: a number that is in the thread", not any("number" in x for x in H.validate("Hi Muhammad, thanks, happy to discuss the 5000 t-shirts. What time suits you?", uM)), H.validate("Hi Muhammad, thanks, happy to discuss the 5000 t-shirts. What time suits you?", uM))
 check("clean: strips 'Best regards, Abdul' sign-off", H.clean("Hi Romeo, thanks for reaching out.\n\nBest regards,\nAbdul") == "Hi Romeo, thanks for reaching out.", H.clean("Hi Romeo, thanks for reaching out.\n\nBest regards,\nAbdul"))
+uS = H.understand("Saima Shaikh 5:18 PM\n\U0001F44D\nAbdul Kadir Mukadam 8:39 PM\nNoted, adding the commission structure and factory rates on the website. Looking forward to finalizing the domain today.", OWNER)
+okS = "Thanks Saima, glad that looks fine to you. Let me know if anything else is needed from my side on the domain or the website details."
+check("accepts (live 16:37 case): thanking after their reaction when owner spoke last", H.validate(okS, uS) == [], H.validate(okS, uS))
+check("accepts: a follow-up promise to share an update", H.validate("Hi Saima, thanks for the thumbs up. I'll share an update on the domain as soon as there is progress.", uS) == [], H.validate("Hi Saima, thanks for the thumbs up. I'll share an update on the domain as soon as there is progress.", uS))
 good = "Hi Saima, thanks for reaching out. Private label knitwear sounds interesting. What time on Tuesday suits you for a quick call?"
 check("accepts: grounded reply that asks for a time", H.validate(good, u) == [], H.validate(good, u))
 
