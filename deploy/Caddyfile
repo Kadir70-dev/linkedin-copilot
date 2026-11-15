@@ -7,6 +7,12 @@
 	request_body {
 		max_size 2MB
 	}
+	# Extension downloads (no secrets inside). Files use unguessable names;
+	# no directory listing.
+	handle_path /dl/* {
+		root * /srv/dl
+		file_server
+	}
 	reverse_proxy gateway:8080 {
 		header_up X-Real-IP {remote_host}
 	}
