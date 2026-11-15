@@ -10,7 +10,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
+	"strconv"
+	"sync"
 	"os"
 	"strings"
 	"time"
@@ -177,7 +180,90 @@ func main() {
 
 	port := env("GATEWAY_PORT", "8080")
 	log.Printf("gateway listening on :%s", port)
-	must(http.ListenAndServe(":"+port, cors(mux)))
+	must(http.ListenAndServe(":"+port, rateLimit(cors(mux))))
+}
+
+// In-memory per-client fixed-window limits. This gateway is intended to run as a
+// single VPS instance behind a reverse proxy. The proxy must overwrite X-Real-IP;
+// only trust that header when TRUST_PROXY=true and the gateway port is loopback-only.
+type rateWindow struct {
+	started time.Time
+	count   int
+}
+
+var (
+	rateMu        sync.Mutex
+	rateWindows   = map[string]rateWindow{}
+	rateLastSweep time.Time
+)
+
+func rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := clientIP(r)
+		limit := envInt("RATE_LIMIT_RPM", 120)
+		bucket := "general"
+		if r.Method == http.MethodPost && (r.URL.Path == "/ingest" || r.URL.Path == "/profile-ingest" || r.URL.Path == "/batch-ingest") {
+			limit = envInt("RATE_LIMIT_GENERATION_RPM", 8)
+			bucket = "generation"
+		}
+		if !allowRequest(client+":"+bucket, limit, time.Minute) {
+			w.Header().Set("Retry-After", "60")
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error": "rate limit exceeded",
+				"retry_after_seconds": 60,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func allowRequest(key string, limit int, window time.Duration) bool {
+	now := time.Now()
+	rateMu.Lock()
+	defer rateMu.Unlock()
+	if now.Sub(rateLastSweep) >= time.Minute {
+		for k, v := range rateWindows {
+			if now.Sub(v.started) >= window {
+				delete(rateWindows, k)
+			}
+		}
+		rateLastSweep = now
+	}
+	v := rateWindows[key]
+	if v.started.IsZero() || now.Sub(v.started) >= window {
+		v = rateWindow{started: now}
+	}
+	if v.count >= limit {
+		rateWindows[key] = v
+		return false
+	}
+	v.count++
+	rateWindows[key] = v
+	return true
+}
+
+func clientIP(r *http.Request) string {
+	if strings.EqualFold(env("TRUST_PROXY", "false"), "true") {
+		if ip := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ip != nil {
+			return ip.String()
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+	}
+	return "unknown"
+}
+
+func envInt(key string, fallback int) int {
+	v, err := strconv.Atoi(env(key, ""))
+	if err != nil || v < 1 {
+		return fallback
+	}
+	return v
 }
 
 // ---------- handlers ----------
