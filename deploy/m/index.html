@@ -34,37 +34,22 @@
 <body>
 <main>
   <h1>LinkedIn Copilot</h1>
-  <p class="sub">Paste a message, get a draft, copy it, and send it yourself in LinkedIn.</p>
+  <p class="sub">Paste their message, get a draft, copy it, send it yourself.</p>
 
-  <section class="card" id="keyCard">
+  <section class="card hidden" id="keyCard">
     <label for="key">Access key</label>
     <input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your access key">
     <button id="saveKey">Save key</button>
     <div class="status" id="keyStatus"></div>
   </section>
 
-  <div class="tabs">
-    <button id="tabReply" class="on">Reply</button>
-    <button id="tabNote">Connection note</button>
-  </div>
 
   <section class="card" id="replyCard">
-    <label for="who">Their name (optional)</label>
-    <input id="who" placeholder="e.g. Saima Shaikh" autocomplete="off">
     <label for="msg">Their message</label>
     <textarea id="msg" placeholder="Paste the message from LinkedIn"></textarea>
     <button id="getReply">Get suggestion</button>
   </section>
 
-  <section class="card hidden" id="noteCard">
-    <label for="pname">Name</label>
-    <input id="pname" placeholder="e.g. Lara Matibaeva" autocomplete="off">
-    <label for="headline">Headline</label>
-    <input id="headline" placeholder="e.g. Founder of Hillbridge Partners | Talent Advisory" autocomplete="off">
-    <label for="about">About / extra details (optional)</label>
-    <textarea id="about" placeholder="Paste anything useful from their profile"></textarea>
-    <button id="getNote">Write connection note</button>
-  </section>
 
   <section class="card hidden" id="draftCard">
     <label for="draft">Draft (edit if needed)</label>
@@ -92,7 +77,7 @@
       headers: Object.assign({ "Authorization": "Bearer " + getKey() }, body ? { "Content-Type": "application/json" } : {}),
       body: body ? JSON.stringify(body) : undefined
     });
-    if (res.status === 401) throw new Error("Access key rejected. Check the key above.");
+    if (res.status === 401) { $("keyCard").classList.remove("hidden"); throw new Error("Access key not accepted. Paste a valid key above."); }
     if (res.status === 429) throw new Error("Too many requests. Wait a minute and try again.");
     if (!res.ok) throw new Error("Server error (" + res.status + "). Try again.");
     return res.json();
@@ -111,9 +96,11 @@
   function busy(btn, on, label) { btn.disabled = on; btn.textContent = on ? "Working…" : label; }
   function showDraft(text) { $("draft").value = text || ""; $("draftCard").classList.remove("hidden"); $("draftCard").scrollIntoView({ behavior: "smooth" }); }
 
-  // key
-  $("key").value = getKey();
-  if (getKey()) $("keyCard").querySelector("label").textContent = "Access key (saved)";
+  // key: a private setup link (#k=<key>) saves it once; the fragment never
+  // reaches the server and is removed from the address bar right away.
+  var m = location.hash.match(/[#&]k=([0-9a-f]{32,128})/i);
+  if (m) { setKey(m[1]); history.replaceState(null, "", location.pathname); }
+  if (!getKey()) $("keyCard").classList.remove("hidden");
   $("saveKey").onclick = async function () {
     setKey($("key").value.trim());
     status($("keyStatus"), "Checking…");
@@ -121,44 +108,22 @@
     catch (e) { status($("keyStatus"), e.message, "err"); }
   };
 
-  // tabs
-  function tab(reply) {
-    $("tabReply").classList.toggle("on", reply); $("tabNote").classList.toggle("on", !reply);
-    $("replyCard").classList.toggle("hidden", !reply); $("noteCard").classList.toggle("hidden", reply);
-    $("draftCard").classList.add("hidden"); status($("status"), "");
-  }
-  $("tabReply").onclick = function () { tab(true); };
-  $("tabNote").onclick = function () { tab(false); };
 
   // reply
   $("getReply").onclick = async function () {
-    var msg = $("msg").value.trim(), who = $("who").value.trim();
+    var msg = $("msg").value.trim();
     if (!getKey()) return status($("status"), "Save your access key first.", "err");
     if (!msg) return status($("status"), "Paste their message first.", "err");
     var btn = this, id = rid("m");
     busy(btn, true); status($("status"), "Writing a draft… (usually 5–20 seconds)");
     try {
-      await api("POST", "/ingest", { thread_id: id, text: (who ? who + " 12:00 PM\n" : "") + msg });
+      await api("POST", "/ingest", { thread_id: id, text: msg });
       var d = await poll("/draft/" + encodeURIComponent(id), function (x) { return x.state === "PENDING_APPROVAL"; }, 120000);
       showDraft(d.draft_text); status($("status"), "Draft ready. Edit it, then Copy.", "ok");
     } catch (e) { status($("status"), e.message, "err"); }
     busy(btn, false, "Get suggestion");
   };
 
-  // connection note
-  $("getNote").onclick = async function () {
-    var name = $("pname").value.trim(), headline = $("headline").value.trim(), about = $("about").value.trim();
-    if (!getKey()) return status($("status"), "Save your access key first.", "err");
-    if (!name || !headline) return status($("status"), "Enter their name and headline.", "err");
-    var btn = this, id = rid("mp");
-    busy(btn, true); status($("status"), "Writing a note… (usually 10–40 seconds)");
-    try {
-      await api("POST", "/profile-ingest", { profile_id: id, name: name, headline: headline, about: about, profile_text: "Name: " + name });
-      var d = await poll("/outreach/" + encodeURIComponent(id), function (x) { return x.state === "OUTREACH_READY"; }, 150000);
-      showDraft(d.outreach_text); status($("status"), "Note ready (LinkedIn allows up to 200–300 characters). Copy it.", "ok");
-    } catch (e) { status($("status"), e.message, "err"); }
-    busy(btn, false, "Write connection note");
-  };
 
   // copy
   $("copy").onclick = async function () {
