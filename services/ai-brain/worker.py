@@ -1034,6 +1034,37 @@ def grounded_fallback(fname: str, profile: str, seed: str = "", fashion: bool = 
     return bare[idx % len(bare)].format(fn=fn)
 
 
+# Relationship / identity claims a connection note must never invent: that the
+# sender shares the person's role or company ("fellow founder at X"), a past
+# conversation or meeting, a mutual contact, or content the profile does not
+# mention. Any hit rejects the draft (retry, then grounded fallback). A phrase
+# that literally appears in the profile text is allowed.
+_REL_PATTERNS = (
+    r"\bfellow\s+[a-z-]+",
+    r"\b(?:we|us|our team|my team|our company)\s+(?:at|from)\s+[a-z]",
+    r"\bas we (?:discussed|spoke|talked|agreed)\b",
+    r"\b(?:we|you and i)\s+(?:met|spoke|talked|chatted)\b",
+    r"\b(?:great|nice|lovely) (?:meeting|talking|chatting|speaking)\b",
+    r"\b(?:our|a|the) mutual\b",
+    r"\bthanks? (?:you )?for (?:connecting|accepting|the connection)\b",
+    r"\bas promised\b",
+    r"\bfollowing up on our\b",
+    r"\byour (?:recent )?(?:post|article|talk|webinar|podcast|newsletter|video)\b",
+    r"\b(?:i|we) (?:also|too) (?:work|worked|lead|run|founded|built)\b",
+    r"\blike you,? i\b",
+)
+
+
+def relationship_claims(note: str, profile: str):
+    low, pl = (note or "").lower(), (profile or "").lower()
+    hits = []
+    for pat in _REL_PATTERNS:
+        m = re.search(pat, low)
+        if m and m.group(0) not in pl:
+            hits.append(m.group(0))
+    return hits
+
+
 def score_note(note: str, grounded: set, fname: str):
     """Lower is better. Primary: #banned phrases. Then: #ungrounded (hallucinated)
     terms — this is the grounding gate. Then: distance from the 120-180 band.
@@ -1406,6 +1437,8 @@ def generate_outreach(state: dict) -> dict:
         # Fashion-voice profiles use the specific-claim gate (sourcing prose is
         # wordy); everyone else uses the strict ungrounded-word count.
         halluc = claim_inventions(nt, grounded) if use_fashion_voice else ung
+        # Invented relationship/identity claims count as hallucinations in every mode.
+        halluc = list(halluc) + [f"claim '{c}'" for c in relationship_claims(nt, profile)]
         ov = overused_hits(nt)
         n = len(nt)
         dist = 0 if 120 <= n <= 180 else (120 - n if n < 120 else n - 180)
@@ -1476,7 +1509,8 @@ def generate_outreach(state: dict) -> dict:
     # disqualifying invention. Fashion = ZERO specific invented claims (strict, per
     # use-case); general = fewer than 2 ungrounded terms (unchanged).
     halluc_ok = best and (best[0][2] == 0 if use_fashion_voice else best[0][2] < 2)
-    acceptable = best and best[0][0] == 0 and best[0][1] == 0 and halluc_ok
+    acceptable = (best and best[0][0] == 0 and best[0][1] == 0 and halluc_ok
+                  and not relationship_claims(best[1], profile))
     if acceptable:
         note = best[1]
         print(f"[ai-brain] outreach OK style={style} conf={style_conf} fashion_voice={use_fashion_voice} "
