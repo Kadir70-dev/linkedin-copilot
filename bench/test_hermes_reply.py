@@ -79,6 +79,7 @@ check("rejects: echoes their question", any("echoes" in x for x in H.validate("W
 check("rejects: spelled-out invented lead time", any("quantity" in x for x in H.validate("Hi Romeo, lead time is typically two to three weeks depending on the design.", uR)))
 uM = H.understand("Muhammad Al-Zafar 9:15 AM\nI want to discuss bulk t-shirt orders, around 5000 pcs.", OWNER)
 check("accepts: a number that is in the thread", not any("number" in x for x in H.validate("Hi Muhammad, thanks, happy to discuss the 5000 t-shirts. What time suits you?", uM)), H.validate("Hi Muhammad, thanks, happy to discuss the 5000 t-shirts. What time suits you?", uM))
+check("clean: strips 'Best regards, Abdul' sign-off", H.clean("Hi Romeo, thanks for reaching out.\n\nBest regards,\nAbdul") == "Hi Romeo, thanks for reaching out.", H.clean("Hi Romeo, thanks for reaching out.\n\nBest regards,\nAbdul"))
 good = "Hi Saima, thanks for reaching out. Private label knitwear sounds interesting. What time on Tuesday suits you for a quick call?"
 check("accepts: grounded reply that asks for a time", H.validate(good, u) == [], H.validate(good, u))
 

@@ -34,3 +34,21 @@ func TestRequireAuth(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerFlag(t *testing.T) {
+	owner := "ownerownerownerownerownerowner00"
+	client := "clientclientclientclientclient00"
+	all := [][32]byte{sha256.Sum256([]byte(owner)), sha256.Sum256([]byte(client))}
+	ownerHashes = [][32]byte{sha256.Sum256([]byte(owner))}
+	defer func() { ownerHashes = nil }()
+	var got string
+	h := requireAuth(all, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = ownerFlag(r) }))
+	for tok, want := range map[string]string{owner: "1", client: ""} {
+		req := httptest.NewRequest("POST", "/ingest", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		if got != want {
+			t.Errorf("token %s: owner flag %q, want %q", tok[:6], got, want)
+		}
+	}
+}

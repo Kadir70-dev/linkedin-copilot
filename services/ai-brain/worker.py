@@ -13,6 +13,7 @@ import uuid
 import requests
 import redis
 
+import claude_cli
 import claude_llm
 import hermes_reply
 
@@ -82,6 +83,9 @@ GROUP = "cg:ai-brain"
 # owner's display name so Hermes can tell their own messages from inbound ones.
 REPLY_ATTEMPTS = int(os.getenv("REPLY_ATTEMPTS", "2") or 2)
 hermes_reply.OWNER_NAME = os.getenv("OWNER_NAME", "").strip()
+# True while processing a message the gateway marked owner=1 (the owner's own
+# access key). Only then may the owner's personal Claude subscription be used.
+OWNER_REQUEST = False
 
 host, port = REDIS_ADDR.split(":")
 r = redis.Redis(host=host, port=int(port), decode_responses=True)
@@ -479,6 +483,11 @@ def generate_with_fallback(prompt: str, system: str, temperature: float,
     OOM during load, timeout) transparently retry on the base model so a draft is
     always produced and the ai-brain never crashes. Returns "" only if both fail.
     When ANTHROPIC_API_KEY is set, Claude is tried first and Qwen is the backup."""
+    if OWNER_REQUEST and claude_cli.enabled():
+        try:
+            return claude_cli.generate(prompt, system)
+        except Exception as e:
+            print(f"[ai-brain] claude cli failed ({type(e).__name__}: {str(e)[:120]}); trying next engine", flush=True)
     if claude_llm.enabled():
         try:
             return claude_llm.generate(prompt, system)
@@ -1595,6 +1604,8 @@ def main():
         for _stream, messages in resp:
             for msg_id, fields in messages:
                 try:
+                    global OWNER_REQUEST
+                    OWNER_REQUEST = fields.get("owner") == "1"
                     if fields.get("type") == "message.received":
                         process(fields["thread_id"], fields.get("text", ""))
                     elif fields.get("type") == "outreach.requested":

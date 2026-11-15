@@ -67,6 +67,7 @@ services:
       # gateway will not start without one unless ALLOW_NO_AUTH=true (laptop only).
       GATEWAY_API_TOKENS: ${GATEWAY_API_TOKENS:-}
       ALLOW_NO_AUTH: ${ALLOW_NO_AUTH:-false}
+      OWNER_API_TOKENS: ${OWNER_API_TOKENS:-}   # owner's own key(s), subset of GATEWAY_API_TOKENS
       # Reported (read-only) via GET /config + GET /stats so the extension and
       # `make doctor` can show the active model strategy + queue. Keep in sync
       # with ai-brain. No send capability is added by exposing these.
@@ -106,6 +107,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-opus-5-5}
       CLAUDE_EFFORT: ${CLAUDE_EFFORT:-low}
+      # Owner-only: the owner's personal Claude plan via Claude Code CLI, used only for
+      # requests made with an OWNER_API_TOKENS key. Token from `claude setup-token`.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      CLAUDE_CLI_MODEL: ${CLAUDE_CLI_MODEL:-sonnet}
     healthcheck:
       # Confirms the worker's deps import and Redis is reachable. Informational
       # in `docker-compose ps` / `make doctor`; auto-recovery is via restart policy.

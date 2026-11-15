@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"log"
@@ -48,6 +49,36 @@ func tokenAllowed(hashes [][32]byte, header string) bool {
 	return match == 1
 }
 
+// Owner keys: the subset of access keys (OWNER_API_TOKENS, each also listed in
+// GATEWAY_API_TOKENS) that belong to the account owner. Requests made with one
+// are tagged owner=1 so the brain may use the owner's personal Claude plan.
+type ctxKey string
+
+const ownerCtx ctxKey = "owner"
+
+var ownerHashes [][32]byte
+
+func loadOwnerTokens(all [][32]byte) {
+	for _, t := range strings.Split(env("OWNER_API_TOKENS", ""), ",") {
+		if t = strings.TrimSpace(t); t == "" {
+			continue
+		}
+		h := sha256.Sum256([]byte(t))
+		if !tokenAllowed(all, "Bearer "+t) {
+			log.Fatal("OWNER_API_TOKENS: every owner key must also be in GATEWAY_API_TOKENS")
+		}
+		ownerHashes = append(ownerHashes, h)
+	}
+}
+
+// ownerFlag returns "1" for requests authenticated with an owner key.
+func ownerFlag(r *http.Request) string {
+	if v, _ := r.Context().Value(ownerCtx).(bool); v {
+		return "1"
+	}
+	return ""
+}
+
 func requireAuth(hashes [][32]byte, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(hashes) == 0 || r.Method == http.MethodOptions || (r.Method == http.MethodGet && r.URL.Path == "/health") {
@@ -58,6 +89,9 @@ func requireAuth(hashes [][32]byte, next http.Handler) http.Handler {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="linkedin-copilot"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
+		}
+		if len(ownerHashes) > 0 && tokenAllowed(ownerHashes, r.Header.Get("Authorization")) {
+			r = r.WithContext(context.WithValue(r.Context(), ownerCtx, true))
 		}
 		next.ServeHTTP(w, r)
 	})

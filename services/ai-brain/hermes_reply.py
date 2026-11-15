@@ -150,7 +150,7 @@ def clean(draft):
     d = _PREAMBLE_RE.sub("", draft or "").strip()
     d = d.strip('"').strip("'").strip()
     d = _EMOJI_RE.sub("", d)
-    d = re.sub(r"(?im)^\s*(best|regards|thanks|cheers),?\s*\n.*$", "", d)  # trailing sign-off
+    d = re.sub(r"(?is)\n\s*(?:best(?: regards)?|kind regards|warm regards|regards|thanks|cheers|sincerely)[,!.]?\s*(?:\n.*)?$", "", d)  # trailing sign-off
     d = re.sub(r"#\w+", "", d)
     return _norm(d)
 

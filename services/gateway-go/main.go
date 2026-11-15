@@ -85,6 +85,7 @@ func env(k, def string) string {
 
 func main() {
 	apiTokens := loadAPITokens()
+	loadOwnerTokens(apiTokens)
 
 	// --- SQLite ---
 	var err error
@@ -330,6 +331,7 @@ func handleIngest(w http.ResponseWriter, r *http.Request) {
 		"type":      "message.received",
 		"thread_id": in.ThreadID,
 		"text":      in.Text,
+		"owner":     ownerFlag(r),
 	}}).Err())
 	log.Printf("ingested thread=%s -> DRAFTING, published message.received", in.ThreadID)
 	writeJSON(w, 200, map[string]any{"ok": true, "thread_id": in.ThreadID, "state": stDrafting})
@@ -459,6 +461,7 @@ func handleProfileIngest(w http.ResponseWriter, r *http.Request) {
 	must(rdb.XAdd(ctx, &redis.XAddArgs{Stream: streamIngest, Values: map[string]any{
 		"type":         "outreach.requested",
 		"profile_id":   in.ProfileID,
+		"owner":        ownerFlag(r),
 		"profile_text": blob,
 		"target_name":  in.Name,
 		// single=1 -> the brain runs the HERMES per-person pipeline (structured
@@ -623,6 +626,7 @@ func handleBatchIngest(w http.ResponseWriter, r *http.Request) {
 		must(rdb.XAdd(ctx, &redis.XAddArgs{Stream: streamIngest, Values: map[string]any{
 			"type":         "outreach.requested",
 			"profile_id":   p.ProfileID,
+			"owner":        ownerFlag(r),
 			"profile_text": blob,
 			"target_name":  p.Name,
 		}}).Err())
