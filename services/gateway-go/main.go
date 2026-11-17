@@ -221,11 +221,38 @@ func countByState(table string) map[string]int {
 // POST /ingest {thread_id, text} -> persist + publish message.received
 func handleIngest(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ThreadID string `json:"thread_id"`
-		Text     string `json:"text"`
+		ThreadID     string `json:"thread_id"`
+		Text         string `json:"text"`
+		Mode         string `json:"mode"`         // reply (default) | compose
+		Instructions string `json:"instructions"` // user's own writing request
+		Tone         string `json:"tone"`         // optional UI style
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.ThreadID == "" {
-		writeJSON(w, 400, map[string]any{"error": "thread_id and text required"})
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&in) != nil {
+		writeJSON(w, 400, map[string]any{"error": "invalid request"})
+		return
+	}
+	in.ThreadID = strings.TrimSpace(in.ThreadID)
+	in.Text = strings.TrimSpace(in.Text)
+	in.Instructions = strings.TrimSpace(in.Instructions)
+	mode := strings.ToLower(strings.TrimSpace(in.Mode))
+	if mode == "" {
+		mode = "reply" // preserve existing clients
+	}
+	if mode != "reply" && mode != "compose" {
+		writeJSON(w, 400, map[string]any{"error": "invalid mode"})
+		return
+	}
+	if in.ThreadID == "" || len(in.ThreadID) > 150 || len(in.Text) > 6000 ||
+		(mode == "reply" && in.Text == "") ||
+		(mode == "compose" && (in.Instructions == "" || len(in.Instructions) > 1600)) {
+		writeJSON(w, 400, map[string]any{"error": "missing or oversized thread/message/instructions"})
+		return
+	}
+	tone := strings.ToLower(strings.TrimSpace(in.Tone))
+	switch tone {
+	case "", "professional", "friendly", "casual", "short":
+	default:
+		writeJSON(w, 400, map[string]any{"error": "unsupported tone"})
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -239,9 +266,12 @@ func handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	// publish message.received
 	must(rdb.XAdd(ctx, &redis.XAddArgs{Stream: streamIngest, Values: map[string]any{
-		"type":      "message.received",
-		"thread_id": in.ThreadID,
-		"text":      in.Text,
+		"type":         "message.received",
+		"thread_id":    in.ThreadID,
+		"text":         in.Text,
+		"mode":         mode,
+		"tone":         tone,
+		"instructions": in.Instructions,
 	}}).Err())
 	log.Printf("ingested thread=%s -> DRAFTING, published message.received", in.ThreadID)
 	writeJSON(w, 200, map[string]any{"ok": true, "thread_id": in.ThreadID, "state": stDrafting})
