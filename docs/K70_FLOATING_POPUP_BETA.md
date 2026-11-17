@@ -4,7 +4,7 @@ The `services/extension` Chrome/Brave Manifest V3 extension already supports Lin
 
 ## Current scope
 
-- **LinkedIn Web only** (`https://www.linkedin.com/messaging/*`).
+- **LinkedIn** (`https://www.linkedin.com/messaging/*`), **WhatsApp Web** (`https://web.whatsapp.com/`) and **Instagram Web DMs** (`https://www.instagram.com/direct/*`). WhatsApp and Instagram are OFF until switched on in the extension Options.
 - `Reply Suggestions`: click **Capture current chat**, review or edit the captured message, choose a tone, click Generate Reply.
 - `Write a Message`: type instructions (e.g. "Tell the recruiter I'm available Thursday, short and friendly"); optionally tick **Include my currently selected conversation**.
 - Results are always editable. **Copy** or **Approve & Insert** inserts the approved text into the LinkedIn composer, but NEVER clicks Send.
@@ -51,6 +51,10 @@ python3 -m py_compile services/ai-brain/worker.py
 8. Reject a draft and confirm no insertion. Disconnect gateway and verify an error is shown without sending/injection.
 9. Switch LinkedIn SPA routes (/messaging → /in → /messaging) and check old popup nodes don't accumulate.
 10. Verify a fresh generated request cannot display the previous draft after switching threads.
+
+## Verified so far
+- `tests/extension-e2e/e2e.mjs` loads the REAL unpacked extension in Chromium against synthetic LinkedIn/WhatsApp/Instagram pages and a mock gateway: consent gating, capture of only the open chat, tone, Hinglish instruction, approve/insert, discard, gateway down + reconnect, drag/minimize, and that Send is never pressed.
+- Not verified: the real WhatsApp/Instagram/LinkedIn DOMs (selectors are best effort and fail safe). See the QA list below.
 
 ## Pending before public release
 

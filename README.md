@@ -1,5 +1,8 @@
 # LinkedIn Copilot — Local MVP (Phase 0 + Phase 1)
 
+> **K70 floating popup (beta):** a draggable AI assistant for LinkedIn, WhatsApp Web and Instagram DMs. Drafts only when you ask, inserts after you approve, never sends. See [`docs/K70_FLOATING_POPUP_BETA.md`](docs/K70_FLOATING_POPUP_BETA.md) and [`docs/K70_PERMISSIONS_PRIVACY_SUPPORT.md`](docs/K70_PERMISSIONS_PRIVACY_SUPPORT.md). Build the install ZIP with `python3 scripts/package_k70.py`.
+
+
 A fully local AI copilot skeleton that proves the safe flow:
 
 ```

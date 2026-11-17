@@ -181,6 +181,13 @@ func main() {
 	mux.HandleFunc("POST /batch-injected", handleBatchInjected)
 	mux.HandleFunc("POST /batch-observed", handleBatchObserved)
 
+	// Data minimisation: delete drafted-chat text after RETENTION_DAYS (default 30, 0 = keep forever).
+	days, convErr := strconv.Atoi(env("RETENTION_DAYS", "30"))
+	if convErr != nil {
+		days = 30
+	}
+	startRetention(ctx, db, rdb, days, streamIngest, streamResult)
+
 	port := env("GATEWAY_PORT", "8080")
 	log.Printf("gateway listening on :%s", port)
 	must(http.ListenAndServe(":"+port, rateLimit(cors(requireAuth(apiTokens, mux)))))

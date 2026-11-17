@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Copilot (observe + inject only)",
-  "version": "0.1.0",
-  "description": "Captures a LinkedIn thread, gets an AI draft via your private gateway, injects it into the composer on approval. NEVER sends. The human is the only sender.",
+  "name": "K70 AI Copilot (draft only)",
+  "version": "0.2.0",
+  "description": "Floating AI reply assistant for LinkedIn, WhatsApp Web and Instagram. Drafts only when you ask, inserts text after you approve. NEVER sends. The human is the only sender.",
   "permissions": [
     "storage"
   ],
@@ -29,6 +29,18 @@
       "css": [
         "premium_panel.css"
       ]
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["adapter_common.js", "premium_panel.js", "whatsapp.js"],
+      "css": ["premium_panel.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["adapter_common.js", "premium_panel.js", "instagram.js"],
+      "css": ["premium_panel.css"],
+      "run_at": "document_idle"
     }
   ],
   "icons": {

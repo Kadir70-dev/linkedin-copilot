@@ -20,3 +20,17 @@ $("save").addEventListener("click", () => {
     });
   });
 });
+
+// Per-platform opt-in for the WhatsApp Web and Instagram popups (default OFF).
+chrome.storage.local.get("k70Platforms", ({ k70Platforms }) => {
+  const f = k70Platforms || {};
+  ["whatsapp", "instagram"].forEach((id) => {
+    const box = $("p-" + id);
+    box.checked = !!f[id];
+    box.addEventListener("change", () => {
+      chrome.storage.local.get("k70Platforms", ({ k70Platforms: cur }) => {
+        chrome.storage.local.set({ k70Platforms: Object.assign({}, cur || {}, { [id]: box.checked }) });
+      });
+    });
+  });
+});

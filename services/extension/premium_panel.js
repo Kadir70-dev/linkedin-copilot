@@ -4,6 +4,7 @@
   globalThis.K70PremiumPanel = function K70PremiumPanel(bridge) {
     if (document.getElementById("k70-copilot")) return;
     const { call, threadId, captureThread, injectIntoComposer, observeHumanSend, toast } = bridge;
+    const P = bridge.platform || { id: "linkedin", label: "LinkedIn" };
     const host = document.createElement("section");
     host.id = "k70-copilot";
     host.setAttribute("data-lc-panel", "1");
@@ -56,7 +57,7 @@
               <button type="button" class="k70-secondary k70-reject" data-action="reject">Discard</button>
             </div>
           </section>
-          <p class="k70-safety">No automatic sending. You click Send inside LinkedIn.</p>
+          <p class="k70-safety">No automatic sending. You press Send inside ${P.label}.</p>
         </div>
       </div>`;
     document.body.appendChild(host);
@@ -140,7 +141,7 @@
         return;
       }
       if (!custom && !selectedText) {
-        setStatus("Open a LinkedIn conversation, capture it, or paste a message.");
+        setStatus("Open a " + P.label + " conversation, capture it, or paste a message.");
         return;
       }
       clearDraft();
@@ -201,10 +202,10 @@
           throw new Error((approved && approved.error) || "Approval was not confirmed by the local gateway.");
         }
         if (!injectIntoComposer(approved.inject_text)) {
-          throw new Error("Open a LinkedIn message thread first. The composer could not be found.");
+          throw new Error("Open a " + P.label + " chat first. The message box could not be found.");
         }
         await call("injected", { thread_id: requestId });
-        setStatus("Inserted into LinkedIn. Review it and click Send yourself.");
+        setStatus("Inserted into " + P.label + ". Review it and press Send yourself.");
         toast("Text inserted — you decide when to send", "ok");
         observeHumanSend(requestId);
         clearDraft();

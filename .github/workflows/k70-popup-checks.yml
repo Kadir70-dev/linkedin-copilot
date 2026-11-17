@@ -5,6 +5,8 @@ on:
       - 'services/extension/**'
       - 'services/gateway-go/**'
       - 'services/ai-brain/**'
+      - 'tests/extension-e2e/**'
+      - 'bench/**'
       - '.github/workflows/k70-popup-checks.yml'
   push:
     branches:
@@ -13,6 +15,8 @@ on:
       - 'services/extension/**'
       - 'services/gateway-go/**'
       - 'services/ai-brain/**'
+      - 'tests/extension-e2e/**'
+      - 'bench/**'
       - '.github/workflows/k70-popup-checks.yml'
 
 permissions:
@@ -28,15 +32,19 @@ jobs:
           node --check services/extension/premium_panel.js
           node --check services/extension/content.js
           node --check services/extension/background.js
+          for f in adapter_common whatsapp instagram options; do node --check services/extension/$f.js; done
           node -e "const fs=require('fs');const m=require('./services/extension/manifest.json');for(const c of m.content_scripts){for(const path of [...(c.js||[]),...(c.css||[])]){if(!fs.existsSync('services/extension/'+path))throw Error('missing '+path)}}"
       - name: Forbidden send API guard (new premium panel)
         run: |
           node - <<'JS'
           const fs = require('fs');
+          const files = ['premium_panel','adapter_common','whatsapp','instagram'];
+          const forbidden = [/\.click\s*\(/, /\.submit\s*\(/, /requestSubmit\s*\(/, /new\s+(Keyboard|Mouse|Pointer)Event\s*\(/,
+            /dispatchEvent/, /keydown|keypress|keyup/, /fetch\s*\(/, /XMLHttpRequest|WebSocket|sendBeacon/, /linkedin\.com\/voyager/i];
+          const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+          for(const f of files){ const s = strip(fs.readFileSync('services/extension/'+f+'.js','utf8'));
+            for(const pattern of forbidden) if(pattern.test(s)) throw Error('Forbidden API in '+f+': '+pattern); }
           const s = fs.readFileSync('services/extension/premium_panel.js','utf8');
-          const forbidden = [/\.click\s*\(/, /\.submit\s*\(/, /requestSubmit\s*\(/,
-            /new\s+KeyboardEvent\s*\(/, /linkedin\.com\/voyager/i];
-          for(const pattern of forbidden) if(pattern.test(s)) throw Error('Forbidden API: '+pattern);
           if(!s.includes('READY_FOR_INJECTION') || !s.includes('injectIntoComposer'))
             throw Error('Missing approval gate / explicit injection');
           JS
@@ -57,3 +65,32 @@ jobs:
       - name: Gateway build and tests
         working-directory: services/gateway-go
         run: go test ./...
+
+  extension-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Playwright Chromium
+        working-directory: tests/extension-e2e
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Real extension end-to-end (synthetic LinkedIn/WhatsApp/Instagram + mock gateway)
+        run: PW_DIR="$PWD/tests/extension-e2e" xvfb-run -a node tests/extension-e2e/e2e.mjs
+
+  ai-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r services/ai-brain/requirements.txt
+      - run: |
+          python3 bench/test_hermes_reply.py
+          python3 bench/test_classification.py
+          python3 bench/test_engine_fallback.py
+          python3 bench/test_outreach_claims.py
