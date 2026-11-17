@@ -1,5 +1,5 @@
 // Settings page: stores the gateway access key in chrome.storage.local and
-// tests it against the configured gateway. No LinkedIn access, no send capability.
+// tests it against the configured gateway. No send capability.
 const $ = (id) => document.getElementById(id);
 const show = (msg) => { $("status").textContent = msg; };
 
@@ -21,16 +21,3 @@ $("save").addEventListener("click", () => {
   });
 });
 
-// Per-platform opt-in for the WhatsApp Web and Instagram popups (default OFF).
-chrome.storage.local.get("k70Platforms", ({ k70Platforms }) => {
-  const f = k70Platforms || {};
-  ["whatsapp", "instagram"].forEach((id) => {
-    const box = $("p-" + id);
-    box.checked = !!f[id];
-    box.addEventListener("change", () => {
-      chrome.storage.local.get("k70Platforms", ({ k70Platforms: cur }) => {
-        chrome.storage.local.set({ k70Platforms: Object.assign({}, cur || {}, { [id]: box.checked }) });
-      });
-    });
-  });
-});

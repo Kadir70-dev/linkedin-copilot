@@ -1,20 +1,24 @@
 (function install() {
   "use strict";
-  // Loaded before content.js by the MV3 manifest. Uses only the existing local gateway.
-  globalThis.K70PremiumPanel = function K70PremiumPanel(bridge) {
-    if (document.getElementById("k70-copilot")) return;
-    const { call, threadId, captureThread, injectIntoComposer, observeHumanSend, toast } = bridge;
-    const P = bridge.platform || { id: "linkedin", label: "LinkedIn" };
+  // Injected into the active tab only when the user clicks the toolbar icon (activeTab). General
+  // purpose: works on any page, reads nothing unless the user presses "Use selected text", and never
+  // touches the page's message boxes. Clicking the icon again closes it.
+  (function K70PremiumPanel() {
+    const existing = document.getElementById("k70-copilot");
+    if (existing) { existing.remove(); return; }
+    const call = (action, payload) => new Promise((res) => chrome.runtime.sendMessage({ action, payload }, res));
+    const threadId = () => "k70";
+    const captureThread = () => String(window.getSelection ? window.getSelection() : "").trim();
     const host = document.createElement("section");
     host.id = "k70-copilot";
     host.setAttribute("data-lc-panel", "1");
     host.setAttribute("aria-label", "K70 AI Copilot");
     host.innerHTML = `
       <button type="button" class="k70-launcher" data-action="expand" title="Open K70 Copilot" aria-label="Open K70 Copilot" hidden>✦</button>
-      <div class="k70-shell" role="complementary" aria-label="K70 AI messaging assistant">
+      <div class="k70-shell" role="complementary" aria-label="K70 AI writing assistant">
         <header class="k70-header" data-drag="1">
           <div class="k70-heading"><span class="k70-brand-icon">✦</span>
-            <div><strong>K70 AI Copilot</strong><small>Draft only · You decide what to send</small></div>
+            <div><strong>K70 AI Copilot</strong><small>Draft only · You copy and send it yourself</small></div>
           </div>
           <div class="k70-window-actions">
             <button type="button" data-action="collapse" aria-label="Minimize Copilot" title="Minimize">−</button>
@@ -27,16 +31,16 @@
             <button type="button" data-mode="compose" role="tab" aria-selected="false">✎ Write a Message</button>
           </nav>
           <section class="k70-pane" data-pane="reply" role="tabpanel">
-            <div class="k70-labelrow"><label for="k70-thread">Message / conversation</label>
-              <button type="button" class="k70-textbutton" data-action="capture">Capture current chat</button>
+            <div class="k70-labelrow"><label for="k70-thread">Message you received</label>
+              <button type="button" class="k70-textbutton" data-action="capture">Use selected text</button>
             </div>
-            <textarea id="k70-thread" rows="3" maxlength="6000" placeholder="Select a chat and press Capture, or paste a message"></textarea>
-            <span class="k70-hint">Only the chat you select and request is processed.</span>
+            <textarea id="k70-thread" rows="3" maxlength="6000" placeholder="Paste a message, or select text on the page and press the button"></textarea>
+            <span class="k70-hint">Only the text shown here is sent, and only when you press Generate.</span>
           </section>
           <section class="k70-pane" data-pane="compose" role="tabpanel" hidden>
             <label for="k70-instruction">Tell AI what you want to say</label>
-            <textarea id="k70-instruction" rows="4" maxlength="1600" placeholder="e.g. Recruiter ko politely bolo I'm available Thursday. Keep it short."></textarea>
-            <label class="k70-checkbox"><input id="k70-context" type="checkbox"> Include my currently selected conversation for context</label>
+            <textarea id="k70-instruction" rows="4" maxlength="1600" placeholder="e.g. Customer ko politely bolo I'm available Thursday. Keep it short."></textarea>
+            <label class="k70-checkbox"><input id="k70-context" type="checkbox"> Include the text I have selected on the page for context</label>
             <span class="k70-hint">Your instructions are treated as your request, not as an incoming message.</span>
           </section>
           <div class="k70-tone-heading">Tone</div>
@@ -49,15 +53,14 @@
           <button type="button" class="k70-primary" data-action="generate">✦ Generate Reply</button>
           <p class="k70-status" role="status" aria-live="polite">Choose a message or write your own instructions.</p>
           <section class="k70-result" data-result="1" hidden>
-            <label for="k70-draft">Your draft — edit before inserting</label>
+            <label for="k70-draft">Your draft — edit before copying</label>
             <textarea id="k70-draft" rows="4" maxlength="6000"></textarea>
             <div class="k70-actions">
-              <button type="button" class="k70-primary" data-action="approve">Approve &amp; Insert</button>
-              <button type="button" class="k70-secondary" data-action="copy">Copy</button>
+              <button type="button" class="k70-primary" data-action="copy">Copy reply</button>
               <button type="button" class="k70-secondary k70-reject" data-action="reject">Discard</button>
             </div>
           </section>
-          <p class="k70-safety">No automatic sending. You press Send inside ${P.label}.</p>
+          <p class="k70-safety">K70 never sends or types into any page. You paste it and press Send yourself.</p>
         </div>
       </div>`;
     document.body.appendChild(host);
@@ -88,7 +91,7 @@
     };
     const setBusy = (value) => {
       busy = value;
-      host.querySelectorAll("[data-mode], [data-tone], [data-action=generate], [data-action=approve], [data-action=reject]")
+      host.querySelectorAll("[data-mode], [data-tone], [data-action=generate], [data-action=copy], [data-action=reject]")
         .forEach((b) => { b.disabled = value; });
       generateButton.textContent = value ? "Generating with local AI…" :
         (mode === "compose" ? "✦ Write My Message" : "✦ Generate Reply");
@@ -106,7 +109,7 @@
         pane.hidden = pane.dataset.pane !== mode;
       });
       generateButton.textContent = mode === "compose" ? "✦ Write My Message" : "✦ Generate Reply";
-      setStatus(mode === "compose" ? "Write your instructions in your own words." : "Capture or paste a message to get a suggestion.");
+      setStatus(mode === "compose" ? "Write your instructions in your own words." : "Paste a message to get a suggestion.");
     };
     host.querySelectorAll("[data-mode]").forEach((button) =>
       button.addEventListener("click", () => selectMode(button.dataset.mode)));
@@ -127,7 +130,7 @@
       const captured = (captureThread() || "").slice(-6000);
       threadBox.value = captured;
       clearDraft();
-      setStatus(captured ? "Captured the current chat. Review it before generating." : "No chat text found. You can paste it manually.");
+      setStatus(captured ? "Selected text added. Review it before generating." : "Nothing is selected on the page. Paste the message instead.");
     });
     generateButton.addEventListener("click", async () => {
       if (busy) return;
@@ -141,7 +144,7 @@
         return;
       }
       if (!custom && !selectedText) {
-        setStatus("Open a " + P.label + " conversation, capture it, or paste a message.");
+        setStatus("Paste the message you want to reply to.");
         return;
       }
       clearDraft();
@@ -167,7 +170,7 @@
             activeId = requestId;
             draftBox.value = d.draft_text;
             result.hidden = false;
-            setStatus("Draft ready. Edit, copy, or approve to insert it.");
+            setStatus("Draft ready. Edit it, then copy.");
             return;
           }
           await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -180,39 +183,17 @@
       }
     });
     $("[data-action=copy]").addEventListener("click", async () => {
-      if (!draftBox.value.trim()) return;
+      if (busy || !activeId || !draftBox.value.trim()) return;
+      const text = draftBox.value.trim();
+      const approved = await call("approve", { thread_id: activeId, decision: "approve_with_edit", edited_text: text });
+      if (!approved || approved.error) { setStatus((approved && approved.error) || "Approval was not confirmed by the gateway."); return; }
       try {
-        await navigator.clipboard.writeText(draftBox.value);
-        setStatus("Copied. You can paste and send it yourself.");
+        await navigator.clipboard.writeText(text);
+        setStatus("Copied. Paste it where you need it and send it yourself.");
       } catch (_) {
         draftBox.focus();
         draftBox.select();
-        setStatus("Copy permission was blocked. Select the highlighted text and press Ctrl+C.");
-      }
-    });
-    $("[data-action=approve]").addEventListener("click", async () => {
-      if (busy || !activeId || !draftBox.value.trim()) return;
-      setBusy(true);
-      const requestId = activeId;
-      try {
-        const approved = await call("approve", {
-          thread_id: requestId, decision: "approve_with_edit", edited_text: draftBox.value.trim(),
-        });
-        if (!approved || approved.error || approved.state !== "READY_FOR_INJECTION" || !approved.inject_text) {
-          throw new Error((approved && approved.error) || "Approval was not confirmed by the local gateway.");
-        }
-        if (!injectIntoComposer(approved.inject_text)) {
-          throw new Error("Open a " + P.label + " chat first. The message box could not be found.");
-        }
-        await call("injected", { thread_id: requestId });
-        setStatus("Inserted into " + P.label + ". Review it and press Send yourself.");
-        toast("Text inserted — you decide when to send", "ok");
-        observeHumanSend(requestId);
-        clearDraft();
-      } catch (error) {
-        setStatus(error.message || "Could not insert message.");
-      } finally {
-        setBusy(false);
+        setStatus("Copy was blocked by the page. Press Ctrl+C on the selected text.");
       }
     });
     $("[data-action=reject]").addEventListener("click", async () => {
@@ -224,7 +205,7 @@
         return;
       }
       clearDraft();
-      setStatus("Draft discarded. Nothing was inserted or sent.");
+      setStatus("Draft discarded. Nothing was copied or sent.");
     });
 
     // Drag using the title bar. Never drag from the buttons.
@@ -249,5 +230,5 @@
     const stopDrag = () => { drag = null; };
     header.addEventListener("pointerup", stopDrag);
     header.addEventListener("pointercancel", stopDrag);
-  };
+  })();
 })();

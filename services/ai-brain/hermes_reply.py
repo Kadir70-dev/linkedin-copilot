@@ -1,4 +1,4 @@
-"""HERMES reply agent — harness around the LinkedIn message-reply draft.
+"""HERMES reply agent — harness around the message-reply draft.
 
 The model only proposes text. Hermes decides what it may say and rejects drafts
 that break the rules:
@@ -50,7 +50,7 @@ COMMIT_PHRASES = ("works for me", "work for me", "works for us", "work for us", 
 MIN_WORDS, MAX_WORDS = 6, 70
 
 SYSTEM = (
-    "You draft a short LinkedIn reply for the account owner. A human reviews it and "
+    "You draft a short reply for the account owner. A human reviews it and "
     "presses Send. Rules, all mandatory:\n"
     "1. Reply ONLY to the latest message from the other person. Never reply to the owner's own message.\n"
     "2. Use ONLY facts in the conversation. Never invent names, companies, prices, numbers, "

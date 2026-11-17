@@ -1,7 +1,15 @@
 // Service worker: performs the cross-origin fetches to the configured gateway only.
-// It talks to nothing on linkedin.com. It has no send capability.
+// Toolbar click injects the popup into the active tab (activeTab; no broad site access). No send capability.
 // GATEWAY is set at package time by scripts/configure_extension.py and must match
 // manifest host_permissions. The access key lives in chrome.storage.local.
+function openPopup(tab) {
+  if (!tab || !tab.id || !/^https?:/.test(tab.url || "")) return Promise.resolve();
+  chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["premium_panel.css"] })
+    .then(() => chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["premium_panel.js"] }))
+    .catch(() => {});
+}
+chrome.action.onClicked.addListener(openPopup);
+
 const GATEWAY = "http://localhost:8080";
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -24,44 +32,6 @@ async function handle({ action, payload }) {
   }
   if (action === "approve") {
     return j(await gw(`${GATEWAY}/approve`, post(payload)));
-  }
-  if (action === "injected") {
-    return j(await gw(`${GATEWAY}/injected`, post(payload)));
-  }
-  if (action === "observed") {
-    return j(await gw(`${GATEWAY}/observed`, post(payload)));
-  }
-  // ---- Phase 1: AI Outreach (cold connection requests, same gateway) ----
-  if (action === "profileIngest") {
-    return j(await gw(`${GATEWAY}/profile-ingest`, post(payload)));
-  }
-  if (action === "getOutreach") {
-    return j(await gw(`${GATEWAY}/outreach/${encodeURIComponent(payload.profile_id)}`));
-  }
-  if (action === "approveOutreach") {
-    return j(await gw(`${GATEWAY}/approve-outreach`, post(payload)));
-  }
-  if (action === "connectionInjected") {
-    return j(await gw(`${GATEWAY}/connection-injected`, post(payload)));
-  }
-  if (action === "connectionObserved") {
-    return j(await gw(`${GATEWAY}/connection-observed`, post(payload)));
-  }
-  // ---- Phase 2: Batch Outreach Queue (scan -> bulk draft -> approval queue) ----
-  if (action === "batchIngest") {
-    return j(await gw(`${GATEWAY}/batch-ingest`, post(payload)));
-  }
-  if (action === "getBatch") {
-    return j(await gw(`${GATEWAY}/batch/${encodeURIComponent(payload.batch_id)}`));
-  }
-  if (action === "batchApprove") {
-    return j(await gw(`${GATEWAY}/batch-approve`, post(payload)));
-  }
-  if (action === "batchInjected") {
-    return j(await gw(`${GATEWAY}/batch-injected`, post(payload)));
-  }
-  if (action === "batchObserved") {
-    return j(await gw(`${GATEWAY}/batch-observed`, post(payload)));
   }
   return { error: "unknown action" };
 }

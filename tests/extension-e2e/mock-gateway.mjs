@@ -23,7 +23,6 @@ export function startMockGateway(port = 8080) {
       if (u.pathname === "/approve") {
         return b.decision === "reject" ? json(200, { state: "REJECTED" }) : json(200, { state: "READY_FOR_INJECTION", inject_text: b.edited_text });
       }
-      if (u.pathname === "/injected" || u.pathname === "/observed") return json(200, { ok: true });
       json(404, { error: "not found" });
     });
   });

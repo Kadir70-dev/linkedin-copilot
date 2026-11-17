@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "K70 AI Copilot (draft only)",
+  "name": "K70 AI Copilot",
   "version": "0.2.0",
-  "description": "Floating AI reply assistant for LinkedIn, WhatsApp Web and Instagram. Drafts only when you ask, inserts text after you approve. NEVER sends. The human is the only sender.",
+  "description": "Floating AI writing assistant for any website. Click the toolbar icon, paste a message or write instructions, pick a tone, copy the draft. It never sends or types into pages.",
   "permissions": [
-    "storage"
+    "storage",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "http://localhost:8080/*"
@@ -16,36 +18,16 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://www.linkedin.com/*"
-      ],
-      "js": [
-        "premium_panel.js",
-        "content.js"
-      ],
-      "run_at": "document_idle",
-      "css": [
-        "premium_panel.css"
-      ]
-    },
-    {
-      "matches": ["https://web.whatsapp.com/*"],
-      "js": ["adapter_common.js", "premium_panel.js", "whatsapp.js"],
-      "css": ["premium_panel.css"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://www.instagram.com/*"],
-      "js": ["adapter_common.js", "premium_panel.js", "instagram.js"],
-      "css": ["premium_panel.css"],
-      "run_at": "document_idle"
-    }
-  ],
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "K70 AI Copilot",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png"
+    }
   }
 }

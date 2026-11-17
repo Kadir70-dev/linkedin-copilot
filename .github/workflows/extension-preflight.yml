@@ -25,7 +25,7 @@ jobs:
       - name: JavaScript syntax
         run: |
           node --check services/extension/background.js
-          node --check services/extension/content.js
+          node --check services/extension/premium_panel.js
       - name: AI-brain classification tests (production worker.py)
         run: python3 bench/test_classification.py
       - name: Hermes reply harness (offline)
@@ -34,29 +34,15 @@ jobs:
         run: python3 bench/test_engine_fallback.py
       - name: Connection-note claim gate
         run: python3 bench/test_outreach_claims.py
-      - name: Safety — no forbidden send APIs in extension
-        run: |
-          # Grep for actual code (not comments) using send-triggering patterns.
-          # Strips comment lines before searching so the safety disclaimer comment
-          # in the file header does not produce a false positive.
-          grep -v '^\s*//' services/extension/content.js \
-            | grep -v '^\s*\*' \
-            | grep -qE "sendButton|\.click\(\)|form\.submit\(\)|\.submit\(\)" \
-            && echo "FORBIDDEN auto-send pattern found!" && exit 1 \
-            || echo "Safety check: CLEAN"
       - name: Go gateway build
         run: |
           cd services/gateway-go
           go build ./...
           go vet ./...
-      - name: Generate icons, verify safety and package
-        run: python3 scripts/prepare_cws.py
-      - name: Validate artifact
-        run: |
-          unzip -l dist/linkedin-copilot-*-LEGACY-PREFLIGHT.zip
-          test ! -e services/extension/.env
+      - name: Verify safety and package
+        run: python3 scripts/package_k70.py
       - uses: actions/upload-artifact@v4
         with:
-          name: linkedin-copilot-legacy-qa-only
-          path: dist/*-LEGACY-PREFLIGHT.zip
+          name: k70-ai-copilot
+          path: dist/k70-ai-copilot-*.zip
           if-no-files-found: error

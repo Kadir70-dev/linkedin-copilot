@@ -11,15 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EXT = ROOT / "services" / "extension"
 DIST = ROOT / "dist"
-ALLOWED_PERMS = {"storage"}
-FORBIDDEN = [r"\.click\s*\(", r"\.submit\s*\(", r"requestSubmit", r"new\s+(Keyboard|Mouse|Pointer)Event", r"sendBeacon", r"WebSocket"]
+ALLOWED_PERMS = {"storage", "activeTab", "scripting"}
+FORBIDDEN = [r"execCommand", r"dispatchEvent", r"\.click\s*\(", r"\.submit\s*\(", r"requestSubmit", r"new\s+(Keyboard|Mouse|Pointer)Event", r"sendBeacon", r"WebSocket"]
 SECRET = re.compile(r"\b[0-9a-f]{40,}\b|sk-[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9_-]{20,}")
 
 
 def referenced(m):
     files = {"manifest.json", m["background"]["service_worker"], m["options_ui"]["page"], "options.js"}
-    for c in m["content_scripts"]:
-        files |= set(c.get("js", [])) | set(c.get("css", []))
+    files |= {"premium_panel.js", "premium_panel.css"}  # injected on toolbar click
     files |= set(m.get("icons", {}).values())
     return sorted(files)
 
@@ -39,7 +38,8 @@ def check():
                 assert not re.search(pat, code), f"forbidden API {pat} in {f}"
         if f.endswith((".js", ".json", ".html", ".css")):
             assert not SECRET.search((EXT / f).read_text()), "possible secret in " + f
-    hosts = sorted({u for c in m["content_scripts"] for u in c["matches"]})
+    assert "content_scripts" not in m, "no always-on content scripts allowed"
+    hosts = sorted(m.get("host_permissions", []))
     print("PASS manifest v%s | permissions: %s | sites: %s" % (m["version"], sorted(m.get("permissions", [])), ", ".join(hosts)))
     return m, files
 

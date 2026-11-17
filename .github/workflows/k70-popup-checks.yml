@@ -29,24 +29,20 @@ jobs:
       - uses: actions/checkout@v4
       - name: JS syntax and manifest references
         run: |
-          node --check services/extension/premium_panel.js
-          node --check services/extension/content.js
-          node --check services/extension/background.js
-          for f in adapter_common whatsapp instagram options; do node --check services/extension/$f.js; done
-          node -e "const fs=require('fs');const m=require('./services/extension/manifest.json');for(const c of m.content_scripts){for(const path of [...(c.js||[]),...(c.css||[])]){if(!fs.existsSync('services/extension/'+path))throw Error('missing '+path)}}"
-      - name: Forbidden send API guard (new premium panel)
+          for f in premium_panel background options; do node --check services/extension/$f.js; done
+          node -e "const fs=require('fs');const m=require('./services/extension/manifest.json');if(m.content_scripts)throw Error('no always-on content scripts');for(const f of ['background.js','options.html','premium_panel.js','premium_panel.css',...Object.values(m.icons)])if(!fs.existsSync('services/extension/'+f))throw Error('missing '+f)"
+      - name: Forbidden send API guard (popup + service worker)
         run: |
           node - <<'JS'
           const fs = require('fs');
-          const files = ['premium_panel','adapter_common','whatsapp','instagram'];
+          const files = ['premium_panel','background','options'];
           const forbidden = [/\.click\s*\(/, /\.submit\s*\(/, /requestSubmit\s*\(/, /new\s+(Keyboard|Mouse|Pointer)Event\s*\(/,
-            /dispatchEvent/, /keydown|keypress|keyup/, /fetch\s*\(/, /XMLHttpRequest|WebSocket|sendBeacon/, /linkedin\.com\/voyager/i];
+            /dispatchEvent/, /execCommand/, /keydown|keypress|keyup/, /XMLHttpRequest|WebSocket|sendBeacon/];
           const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
           for(const f of files){ const s = strip(fs.readFileSync('services/extension/'+f+'.js','utf8'));
             for(const pattern of forbidden) if(pattern.test(s)) throw Error('Forbidden API in '+f+': '+pattern); }
           const s = fs.readFileSync('services/extension/premium_panel.js','utf8');
-          if(!s.includes('READY_FOR_INJECTION') || !s.includes('injectIntoComposer'))
-            throw Error('Missing approval gate / explicit injection');
+          if(!s.includes('approve_with_edit')) throw Error('Missing gateway approval before copy');
           JS
 
   backend-syntax:
@@ -78,7 +74,7 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
-      - name: Real extension end-to-end (synthetic LinkedIn/WhatsApp/Instagram + mock gateway)
+      - name: Real extension end-to-end (generic page + mock gateway)
         run: PW_DIR="$PWD/tests/extension-e2e" xvfb-run -a node tests/extension-e2e/e2e.mjs
 
   ai-tests:
