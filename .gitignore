@@ -19,3 +19,4 @@ services/gateway-go/gateway
 services/gateway-go/*.test
 test-results/
 playwright-report/
+deploy/dl/

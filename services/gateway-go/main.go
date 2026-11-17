@@ -10,9 +10,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -81,6 +84,9 @@ func env(k, def string) string {
 }
 
 func main() {
+	apiTokens := loadAPITokens()
+	loadOwnerTokens(apiTokens)
+
 	// --- SQLite ---
 	var err error
 	db, err = sql.Open("sqlite", "file:"+env("DB_PATH", "./app.db")+"?_pragma=busy_timeout(5000)")
@@ -175,9 +181,99 @@ func main() {
 	mux.HandleFunc("POST /batch-injected", handleBatchInjected)
 	mux.HandleFunc("POST /batch-observed", handleBatchObserved)
 
+	// Data minimisation: delete drafted-chat text after RETENTION_DAYS (default 30, 0 = keep forever).
+	days, convErr := strconv.Atoi(env("RETENTION_DAYS", "30"))
+	if convErr != nil {
+		days = 30
+	}
+	startRetention(ctx, db, rdb, days, streamIngest, streamResult)
+
 	port := env("GATEWAY_PORT", "8080")
 	log.Printf("gateway listening on :%s", port)
-	must(http.ListenAndServe(":"+port, cors(mux)))
+	must(http.ListenAndServe(":"+port, rateLimit(cors(requireAuth(apiTokens, mux)))))
+}
+
+// In-memory per-client fixed-window limits. This gateway is intended to run as a
+// single VPS instance behind a reverse proxy. The proxy must overwrite X-Real-IP;
+// only trust that header when TRUST_PROXY=true and the gateway port is loopback-only.
+type rateWindow struct {
+	started time.Time
+	count   int
+}
+
+var (
+	rateMu        sync.Mutex
+	rateWindows   = map[string]rateWindow{}
+	rateLastSweep time.Time
+)
+
+func rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := clientIP(r)
+		limit := envInt("RATE_LIMIT_RPM", 120)
+		bucket := "general"
+		if r.Method == http.MethodPost && (r.URL.Path == "/ingest" || r.URL.Path == "/profile-ingest" || r.URL.Path == "/batch-ingest") {
+			limit = envInt("RATE_LIMIT_GENERATION_RPM", 8)
+			bucket = "generation"
+		}
+		if !allowRequest(client+":"+bucket, limit, time.Minute) {
+			w.Header().Set("Retry-After", "60")
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error":               "rate limit exceeded",
+				"retry_after_seconds": 60,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func allowRequest(key string, limit int, window time.Duration) bool {
+	now := time.Now()
+	rateMu.Lock()
+	defer rateMu.Unlock()
+	if now.Sub(rateLastSweep) >= time.Minute {
+		for k, v := range rateWindows {
+			if now.Sub(v.started) >= window {
+				delete(rateWindows, k)
+			}
+		}
+		rateLastSweep = now
+	}
+	v := rateWindows[key]
+	if v.started.IsZero() || now.Sub(v.started) >= window {
+		v = rateWindow{started: now}
+	}
+	if v.count >= limit {
+		rateWindows[key] = v
+		return false
+	}
+	v.count++
+	rateWindows[key] = v
+	return true
+}
+
+func clientIP(r *http.Request) string {
+	if strings.EqualFold(env("TRUST_PROXY", "false"), "true") {
+		if ip := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ip != nil {
+			return ip.String()
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+	}
+	return "unknown"
+}
+
+func envInt(key string, fallback int) int {
+	v, err := strconv.Atoi(env(key, ""))
+	if err != nil || v < 1 {
+		return fallback
+	}
+	return v
 }
 
 // ---------- handlers ----------
@@ -221,11 +317,38 @@ func countByState(table string) map[string]int {
 // POST /ingest {thread_id, text} -> persist + publish message.received
 func handleIngest(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ThreadID string `json:"thread_id"`
-		Text     string `json:"text"`
+		ThreadID     string `json:"thread_id"`
+		Text         string `json:"text"`
+		Mode         string `json:"mode"`         // reply (default) | compose
+		Instructions string `json:"instructions"` // user's own writing request
+		Tone         string `json:"tone"`         // optional UI style
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.ThreadID == "" {
-		writeJSON(w, 400, map[string]any{"error": "thread_id and text required"})
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&in) != nil {
+		writeJSON(w, 400, map[string]any{"error": "invalid request"})
+		return
+	}
+	in.ThreadID = strings.TrimSpace(in.ThreadID)
+	in.Text = strings.TrimSpace(in.Text)
+	in.Instructions = strings.TrimSpace(in.Instructions)
+	mode := strings.ToLower(strings.TrimSpace(in.Mode))
+	if mode == "" {
+		mode = "reply" // preserve existing clients
+	}
+	if mode != "reply" && mode != "compose" {
+		writeJSON(w, 400, map[string]any{"error": "invalid mode"})
+		return
+	}
+	if in.ThreadID == "" || len(in.ThreadID) > 150 || len(in.Text) > 6000 ||
+		(mode == "reply" && in.Text == "") ||
+		(mode == "compose" && (in.Instructions == "" || len(in.Instructions) > 1600)) {
+		writeJSON(w, 400, map[string]any{"error": "missing or oversized thread/message/instructions"})
+		return
+	}
+	tone := strings.ToLower(strings.TrimSpace(in.Tone))
+	switch tone {
+	case "", "professional", "friendly", "casual", "short":
+	default:
+		writeJSON(w, 400, map[string]any{"error": "unsupported tone"})
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -239,9 +362,13 @@ func handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	// publish message.received
 	must(rdb.XAdd(ctx, &redis.XAddArgs{Stream: streamIngest, Values: map[string]any{
-		"type":      "message.received",
-		"thread_id": in.ThreadID,
-		"text":      in.Text,
+		"type":         "message.received",
+		"thread_id":    in.ThreadID,
+		"text":         in.Text,
+		"mode":         mode,
+		"tone":         tone,
+		"instructions": in.Instructions,
+		"owner":        ownerFlag(r),
 	}}).Err())
 	log.Printf("ingested thread=%s -> DRAFTING, published message.received", in.ThreadID)
 	writeJSON(w, 200, map[string]any{"ok": true, "thread_id": in.ThreadID, "state": stDrafting})
@@ -371,6 +498,7 @@ func handleProfileIngest(w http.ResponseWriter, r *http.Request) {
 	must(rdb.XAdd(ctx, &redis.XAddArgs{Stream: streamIngest, Values: map[string]any{
 		"type":         "outreach.requested",
 		"profile_id":   in.ProfileID,
+		"owner":        ownerFlag(r),
 		"profile_text": blob,
 		"target_name":  in.Name,
 		// single=1 -> the brain runs the HERMES per-person pipeline (structured
@@ -396,7 +524,7 @@ func handleGetOutreach(w http.ResponseWriter, r *http.Request) {
 		"profile_id": pid, "state": state, "outreach_text": text, "style": style,
 		"style_confidence": styleConf.String,
 		"hermes":           hermesJSON.String,
-		"key_phrases": keyPhrases.String, "grounding": grounding.String,
+		"key_phrases":      keyPhrases.String, "grounding": grounding.String,
 		"personalization": personalization.String,
 	})
 }
@@ -535,6 +663,7 @@ func handleBatchIngest(w http.ResponseWriter, r *http.Request) {
 		must(rdb.XAdd(ctx, &redis.XAddArgs{Stream: streamIngest, Values: map[string]any{
 			"type":         "outreach.requested",
 			"profile_id":   p.ProfileID,
+			"owner":        ownerFlag(r),
 			"profile_text": blob,
 			"target_name":  p.Name,
 		}}).Err())
@@ -816,11 +945,30 @@ func body(r *http.Request) map[string]string {
 
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		allowed := false
+		for _, candidate := range strings.Split(env("CORS_ALLOWED_ORIGINS", "*"), ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "*" || (candidate != "" && candidate == origin) {
+				allowed = true
+				if candidate == "*" {
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+				} else {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Add("Vary", "Origin")
+				}
+				break
+			}
+		}
+		if origin != "" && !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin not allowed"})
+			return
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "600")
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(204)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		h.ServeHTTP(w, r)

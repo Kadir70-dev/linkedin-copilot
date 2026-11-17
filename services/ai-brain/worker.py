@@ -13,6 +13,10 @@ import uuid
 import requests
 import redis
 
+import claude_cli
+import claude_llm
+import hermes_reply
+
 REDIS_ADDR = os.getenv("REDIS_ADDR", "localhost:6379")
 OLLAMA = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
@@ -74,6 +78,14 @@ IS_FASHION = MODE == "fashion"
 STREAM_INGEST = "stream:message_ingest"
 STREAM_RESULT = "stream:cognition_result"
 GROUP = "cg:ai-brain"
+
+# Reply harness: attempts per message before the safe fallback, and the account
+# owner's display name so Hermes can tell their own messages from inbound ones.
+REPLY_ATTEMPTS = int(os.getenv("REPLY_ATTEMPTS", "2") or 2)
+hermes_reply.OWNER_NAME = os.getenv("OWNER_NAME", "").strip()
+# True while processing a message the gateway marked owner=1 (the owner's own
+# access key). Only then may the owner's personal Claude subscription be used.
+OWNER_REQUEST = False
 
 host, port = REDIS_ADDR.split(":")
 r = redis.Redis(host=host, port=int(port), decode_responses=True)
@@ -441,6 +453,10 @@ def ollama_generate(prompt: str, system: str = SYSTEM, temperature: float = 0.4,
         ollama_unload(_last_model)
     _last_model = model
     try:
+        if thinking:
+            # Thinking-capable Qwen (qwen3 / qwen3.5): ChatOllama cannot switch
+            # thinking off, so go straight to the HTTP path with think=false.
+            raise RuntimeError("thinking model: using /api/generate with think=false")
         from langchain_ollama import ChatOllama
         kw = {"model": model, "base_url": OLLAMA, "temperature": temperature}
         if np:
@@ -448,12 +464,14 @@ def ollama_generate(prompt: str, system: str = SYSTEM, temperature: float = 0.4,
         llm = ChatOllama(**kw)
         return strip_thinking(llm.invoke(f"{sys_prompt}\n\n{prompt}").content.strip())
     except Exception as e:  # lib/version issues must never break the demo
-        print(f"[ai-brain] ChatOllama unavailable ({e}); using HTTP fallback", flush=True)
-        body = {"model": model, "prompt": f"{sys_prompt}\n\n{prompt}", "stream": False}
+        if not thinking:
+            print(f"[ai-brain] ChatOllama unavailable ({e}); using HTTP fallback", flush=True)
+        body = {"model": model, "prompt": f"{sys_prompt}\n\n{prompt}", "stream": False,
+                "options": {"temperature": temperature}}
         if thinking:
             body["think"] = False
         if np:
-            body["options"] = {"num_predict": np}
+            body["options"]["num_predict"] = np
         resp = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=300)
         resp.raise_for_status()
         return strip_thinking(resp.json().get("response", "").strip())
@@ -463,7 +481,18 @@ def generate_with_fallback(prompt: str, system: str, temperature: float,
                            num_predict: int, model: str) -> str:
     """Generate on `model`, but if it fails for ANY reason (not pulled, load error,
     OOM during load, timeout) transparently retry on the base model so a draft is
-    always produced and the ai-brain never crashes. Returns "" only if both fail."""
+    always produced and the ai-brain never crashes. Returns "" only if both fail.
+    When ANTHROPIC_API_KEY is set, Claude is tried first and Qwen is the backup."""
+    if OWNER_REQUEST and claude_cli.enabled():
+        try:
+            return claude_cli.generate(prompt, system)
+        except Exception as e:
+            print(f"[ai-brain] claude cli failed ({type(e).__name__}: {str(e)[:120]}); trying next engine", flush=True)
+    if claude_llm.enabled():
+        try:
+            return claude_llm.generate(prompt, system)
+        except Exception as e:
+            print(f"[ai-brain] claude failed ({type(e).__name__}: {str(e)[:120]}); using local {model}", flush=True)
     try:
         return ollama_generate(prompt, system=system, temperature=temperature,
                                num_predict=num_predict, model=model)
@@ -494,15 +523,23 @@ def retrieve_memory(state: dict) -> dict:
     return state
 
 
+REPLY_TONE_GUIDANCE = {
+    "professional": "Use a polished, respectful professional tone.",
+    "friendly": "Sound warm, approachable, and natural.",
+    "casual": "Use relaxed everyday language without being careless.",
+    "short": "Be direct and concise, ideally under 25 words.",
+}
+
+
 def generate_draft(state: dict) -> dict:
-    prompt = (
-        f"Conversation so far:\n{state['text']}\n\n"
-        f"Detected intent: {state['intent']}\n"
-        f"Notes about me: {state['memory']}\n\n"
-        f"Draft my reply:"
-    )
-    state["draft"] = ollama_generate(prompt, num_predict=150 if FAST_MODE else 0) \
-        or "Thanks for the message — happy to chat. When works for you?"
+    # HERMES reply agent (hermes_reply.py): understands the thread, builds a strict
+    # prompt, validates every draft (no invented facts/days/links/names, no
+    # commitments, no emoji) and falls back to a fact-only reply if none passes.
+    gen = lambda prompt, system: generate_with_fallback(
+        prompt, system, 0.3, 120 if FAST_MODE else 160, BASE_MODEL)
+    draft, meta = hermes_reply.run(state["text"], gen, attempts=REPLY_ATTEMPTS,
+                                   tone=state.get("tone", ""), instructions=state.get("instructions", ""))
+    state["draft"], state["hermes"] = draft, meta
     return state
 
 
@@ -1006,6 +1043,37 @@ def grounded_fallback(fname: str, profile: str, seed: str = "", fashion: bool = 
     return bare[idx % len(bare)].format(fn=fn)
 
 
+# Relationship / identity claims a connection note must never invent: that the
+# sender shares the person's role or company ("fellow founder at X"), a past
+# conversation or meeting, a mutual contact, or content the profile does not
+# mention. Any hit rejects the draft (retry, then grounded fallback). A phrase
+# that literally appears in the profile text is allowed.
+_REL_PATTERNS = (
+    r"\bfellow\s+[a-z-]+",
+    r"\b(?:we|us|our team|my team|our company)\s+(?:at|from)\s+[a-z]",
+    r"\bas we (?:discussed|spoke|talked|agreed)\b",
+    r"\b(?:we|you and i)\s+(?:met|spoke|talked|chatted)\b",
+    r"\b(?:great|nice|lovely) (?:meeting|talking|chatting|speaking)\b",
+    r"\b(?:our|a|the) mutual\b",
+    r"\bthanks? (?:you )?for (?:connecting|accepting|the connection)\b",
+    r"\bas promised\b",
+    r"\bfollowing up on our\b",
+    r"\byour (?:recent )?(?:post|article|talk|webinar|podcast|newsletter|video)\b",
+    r"\b(?:i|we) (?:also|too) (?:work|worked|lead|run|founded|built)\b",
+    r"\blike you,? i\b",
+)
+
+
+def relationship_claims(note: str, profile: str):
+    low, pl = (note or "").lower(), (profile or "").lower()
+    hits = []
+    for pat in _REL_PATTERNS:
+        m = re.search(pat, low)
+        if m and m.group(0) not in pl:
+            hits.append(m.group(0))
+    return hits
+
+
 def score_note(note: str, grounded: set, fname: str):
     """Lower is better. Primary: #banned phrases. Then: #ungrounded (hallucinated)
     terms — this is the grounding gate. Then: distance from the 120-180 band.
@@ -1378,6 +1446,8 @@ def generate_outreach(state: dict) -> dict:
         # Fashion-voice profiles use the specific-claim gate (sourcing prose is
         # wordy); everyone else uses the strict ungrounded-word count.
         halluc = claim_inventions(nt, grounded) if use_fashion_voice else ung
+        # Invented relationship/identity claims count as hallucinations in every mode.
+        halluc = list(halluc) + [f"claim '{c}'" for c in relationship_claims(nt, profile)]
         ov = overused_hits(nt)
         n = len(nt)
         dist = 0 if 120 <= n <= 180 else (120 - n if n < 120 else n - 180)
@@ -1448,7 +1518,8 @@ def generate_outreach(state: dict) -> dict:
     # disqualifying invention. Fashion = ZERO specific invented claims (strict, per
     # use-case); general = fewer than 2 ungrounded terms (unchanged).
     halluc_ok = best and (best[0][2] == 0 if use_fashion_voice else best[0][2] < 2)
-    acceptable = best and best[0][0] == 0 and best[0][1] == 0 and halluc_ok
+    acceptable = (best and best[0][0] == 0 and best[0][1] == 0 and halluc_ok
+                  and not relationship_claims(best[1], profile))
     if acceptable:
         note = best[1]
         print(f"[ai-brain] outreach OK style={style} conf={style_conf} fashion_voice={use_fashion_voice} "
@@ -1529,16 +1600,44 @@ def process_outreach(profile_id: str, profile_text: str, target_name: str = "", 
     print(f"[ai-brain] profile={profile_id} style={out.get('style')} -> outreach.generated: {out['outreach'][:80]!r}", flush=True)
 
 
-def process(thread_id: str, text: str):
-    out = GRAPH.invoke({"thread_id": thread_id, "text": text})
-    draft = out["draft"]
+COMPOSE_SYSTEM = (
+    "You write a message for the user, based on the user's OWN writing "
+    "instructions. These instructions are not an incoming message to reply to. "
+    "Draft only the finished message, no preamble, no quotes and no explanation. "
+    "Understand instructions written in English, Hindi, Urdu or Hinglish; write the message in the "
+    "language the user asks for (English by default). "
+    "Do not invent meetings, credentials, promises, names, dates, links or personal facts. "
+    "Never send or take any action."
+)
+
+
+def process(thread_id: str, text: str, mode: str = "reply",
+            tone: str = "", instructions: str = ""):
+    if mode == "compose":
+        tone_hint = REPLY_TONE_GUIDANCE.get(tone, "")
+        prompt = (
+            "My writing instructions:\n" + instructions + "\n\n" +
+            ("Optional context from my selected conversation:\n" + text + "\n\n"
+             if text else "") +
+            "Write the requested message now."
+        )
+        system = COMPOSE_SYSTEM + (" " + tone_hint if tone_hint else "")
+        raw = generate_with_fallback(prompt, system, 0.4, 220 if FAST_MODE else 300, BASE_MODEL)
+        # An unavailable model must not produce fake text for the user to insert.
+        draft = hermes_reply.clean(raw or "")
+        meta = {"source": "model" if draft else "none", "mode": "compose"}
+    else:
+        out = GRAPH.invoke({"thread_id": thread_id, "text": text, "tone": tone, "instructions": instructions})
+        draft, meta = out["draft"], out.get("hermes") or {}
     r.xadd(STREAM_RESULT, {
         "type": "draft.generated",
         "thread_id": thread_id,
         "draft_text": draft,
+        "hermes": json.dumps(meta, ensure_ascii=False)[:4000],
         "event_id": str(uuid.uuid4()),
     })
-    print(f"[ai-brain] thread={thread_id} -> draft.generated: {draft[:80]!r}", flush=True)
+    print(f"[ai-brain] thread={thread_id} mode={mode} -> draft.generated source={meta.get('source')} "
+          f"attempt={meta.get('attempt')} rejected={len(meta.get('rejected') or [])}: {draft[:80]!r}", flush=True)
 
 
 def main():
@@ -1558,7 +1657,7 @@ def main():
           f"premium={PREMIUM_MODEL if PREMIUM_ROUTING else 'off'} mode={MODE} "
           f"fast={FAST_MODE} sequential={SEQUENTIAL} (read_count={READ_COUNT}) "
           f"ram_min_free={RAM_MIN_FREE_MB}MB free_now={host_free_mb()}MB "
-          f"ollama={OLLAMA}", flush=True)
+          f"ollama={OLLAMA} claude={claude_llm.CLAUDE_MODEL + '/' + claude_llm.CLAUDE_EFFORT if claude_llm.enabled() else 'off'}", flush=True)
 
     while True:
         try:
@@ -1574,8 +1673,14 @@ def main():
         for _stream, messages in resp:
             for msg_id, fields in messages:
                 try:
+                    global OWNER_REQUEST
+                    OWNER_REQUEST = fields.get("owner") == "1"
                     if fields.get("type") == "message.received":
-                        process(fields["thread_id"], fields.get("text", ""))
+                        process(
+                            fields["thread_id"], fields.get("text", ""),
+                            fields.get("mode", "reply"), fields.get("tone", ""),
+                            fields.get("instructions", ""),
+                        )
                     elif fields.get("type") == "outreach.requested":
                         if SEQUENTIAL:
                             print(f"[ai-brain] [seq] start profile={fields.get('profile_id')} "

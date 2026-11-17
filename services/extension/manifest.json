@@ -1,31 +1,33 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Copilot (observe + inject only)",
-  "version": "0.1.0",
-  "description": "Captures a LinkedIn thread, gets an AI draft via the local gateway, injects it into the composer on approval. NEVER sends. The human is the only sender.",
+  "name": "K70 AI Copilot",
+  "version": "0.2.0",
+  "description": "Floating AI writing assistant for any website. Click the toolbar icon, paste a message or write instructions, pick a tone, copy the draft. It never sends or types into pages.",
   "permissions": [
-    "storage"
+    "storage",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "http://localhost:8080/*"
   ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://www.linkedin.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ],
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "K70 AI Copilot",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png"
+    }
   }
 }

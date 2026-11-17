@@ -1,5 +1,10 @@
 # LinkedIn Copilot — Local MVP (Phase 0 + Phase 1)
 
+> **K70 AI Copilot (beta):** a general-purpose floating AI writing assistant for any website. Click the toolbar icon, paste or select a message (or write instructions in your own words), pick a tone, copy the draft. It never types into a page and never sends. See [`docs/K70_FLOATING_POPUP_BETA.md`](docs/K70_FLOATING_POPUP_BETA.md) and [`docs/K70_PERMISSIONS_PRIVACY_SUPPORT.md`](docs/K70_PERMISSIONS_PRIVACY_SUPPORT.md). Build the install ZIP with `python3 scripts/package_k70.py`.
+>
+> The older LinkedIn-specific content script, outreach and batch flows described below were removed from the extension; the gateway endpoints remain.
+
+
 A fully local AI copilot skeleton that proves the safe flow:
 
 ```

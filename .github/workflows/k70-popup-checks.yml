@@ -1,0 +1,92 @@
+name: K70 Floating Copilot Checks
+on:
+  pull_request:
+    paths:
+      - 'services/extension/**'
+      - 'services/gateway-go/**'
+      - 'services/ai-brain/**'
+      - 'tests/extension-e2e/**'
+      - 'bench/**'
+      - '.github/workflows/k70-popup-checks.yml'
+  push:
+    branches:
+      - 'feature/k70-floating-copilot-v1-20261117'
+    paths:
+      - 'services/extension/**'
+      - 'services/gateway-go/**'
+      - 'services/ai-brain/**'
+      - 'tests/extension-e2e/**'
+      - 'bench/**'
+      - '.github/workflows/k70-popup-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  extension-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JS syntax and manifest references
+        run: |
+          for f in premium_panel background options; do node --check services/extension/$f.js; done
+          node -e "const fs=require('fs');const m=require('./services/extension/manifest.json');if(m.content_scripts)throw Error('no always-on content scripts');for(const f of ['background.js','options.html','premium_panel.js','premium_panel.css',...Object.values(m.icons)])if(!fs.existsSync('services/extension/'+f))throw Error('missing '+f)"
+      - name: Forbidden send API guard (popup + service worker)
+        run: |
+          node - <<'JS'
+          const fs = require('fs');
+          const files = ['premium_panel','background','options'];
+          const forbidden = [/\.click\s*\(/, /\.submit\s*\(/, /requestSubmit\s*\(/, /new\s+(Keyboard|Mouse|Pointer)Event\s*\(/,
+            /dispatchEvent/, /execCommand/, /keydown|keypress|keyup/, /XMLHttpRequest|WebSocket|sendBeacon/];
+          const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+          for(const f of files){ const s = strip(fs.readFileSync('services/extension/'+f+'.js','utf8'));
+            for(const pattern of forbidden) if(pattern.test(s)) throw Error('Forbidden API in '+f+': '+pattern); }
+          const s = fs.readFileSync('services/extension/premium_panel.js','utf8');
+          if(!s.includes('approve_with_edit')) throw Error('Missing gateway approval before copy');
+          JS
+
+  backend-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python worker syntax
+        run: python -m py_compile services/ai-brain/worker.py
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: services/gateway-go/go.sum
+      - name: Gateway build and tests
+        working-directory: services/gateway-go
+        run: go test ./...
+
+  extension-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Playwright Chromium
+        working-directory: tests/extension-e2e
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Real extension end-to-end (generic page + mock gateway)
+        run: PW_DIR="$PWD/tests/extension-e2e" xvfb-run -a node tests/extension-e2e/e2e.mjs
+
+  ai-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r services/ai-brain/requirements.txt
+      - run: |
+          python3 bench/test_hermes_reply.py
+          python3 bench/test_classification.py
+          python3 bench/test_engine_fallback.py
+          python3 bench/test_outreach_claims.py

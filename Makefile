@@ -1,3 +1,8 @@
+# Gateway access key for the curl targets below: first GATEWAY_API_TOKENS entry
+# in .env, passed via the environment so make never echoes it.
+export GW_TOKEN := $(shell [ -f .env ] && sed -n 's/^GATEWAY_API_TOKENS=\([^,]*\).*/\1/p' .env)
+GW_AUTH = -H "Authorization: Bearer $$GW_TOKEN"
+
 .PHONY: up down logs pull-model demo demo-outreach demo-batch ps restart doctor
 
 # Bring up all services (build images on first run)
@@ -43,7 +48,7 @@ doctor:
 	  [ -n "$$cid" ] && docker inspect -f 'status={{.State.Status}} exit={{.State.ExitCode}} restarts={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' $$cid 2>/dev/null || echo "not created"
 	@echo
 	@echo "--- model strategy + queue (gateway /stats) ---"
-	@curl -s -m 3 localhost:8080/stats 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "  (gateway /stats unavailable — is the stack up?)"
+	@curl -s -m 3 $(GW_AUTH) localhost:8080/stats 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "  (gateway /stats unavailable — is the stack up?)"
 	@echo
 	@echo "--- ollama: models loaded in RAM right now ---"
 	@docker-compose exec -T ollama ollama ps 2>/dev/null || echo "  (ollama not running)"
@@ -62,46 +67,46 @@ doctor:
 # End-to-end smoke test WITHOUT the browser: ingest -> wait -> show draft -> approve.
 demo:
 	@echo "== POST /ingest =="
-	curl -s -X POST localhost:8080/ingest -H 'Content-Type: application/json' \
+	curl -s $(GW_AUTH) -X POST localhost:8080/ingest -H 'Content-Type: application/json' \
 	  -d '{"thread_id":"demo","text":"Hi! Are you free to chat Thursday about the role?"}' ; echo
 	@echo "== waiting for AI draft (Ollama generation can take a while) =="
 	@for i in $$(seq 1 60); do \
-	  s=$$(curl -s localhost:8080/draft/demo); \
+	  s=$$(curl -s $(GW_AUTH) localhost:8080/draft/demo); \
 	  echo "$$s" | grep -q PENDING_APPROVAL && { echo "$$s"; break; }; \
 	  sleep 2; \
 	done
 	@echo "== POST /approve =="
-	curl -s -X POST localhost:8080/approve -H 'Content-Type: application/json' \
+	curl -s $(GW_AUTH) -X POST localhost:8080/approve -H 'Content-Type: application/json' \
 	  -d '{"thread_id":"demo","decision":"approve"}' ; echo
 	@echo "(In the browser this text is INJECTED into the composer. A human still clicks Send.)"
 
 # Phase 1 — browserless AI Outreach end-to-end: profile-ingest -> generate -> approve.
 demo-outreach:
 	@echo "== POST /profile-ingest =="
-	curl -s -X POST localhost:8080/profile-ingest -H 'Content-Type: application/json' \
+	curl -s $(GW_AUTH) -X POST localhost:8080/profile-ingest -H 'Content-Type: application/json' \
 	  -d '{"profile_id":"demo-prof","headline":"Founder & CEO at Acme Robotics","about":"Building warehouse automation. Ex-Tesla.","profile_text":"Name: Jane Doe","context":"We both attended RoboConf 2025"}' ; echo
 	@echo "== waiting for AI outreach (Ollama generation can take a while) =="
 	@for i in $$(seq 1 60); do \
-	  s=$$(curl -s localhost:8080/outreach/demo-prof); \
+	  s=$$(curl -s $(GW_AUTH) localhost:8080/outreach/demo-prof); \
 	  echo "$$s" | grep -q OUTREACH_READY && { echo "$$s"; break; }; \
 	  sleep 2; \
 	done
 	@echo "== POST /approve-outreach =="
-	curl -s -X POST localhost:8080/approve-outreach -H 'Content-Type: application/json' \
+	curl -s $(GW_AUTH) -X POST localhost:8080/approve-outreach -H 'Content-Type: application/json' \
 	  -d '{"profile_id":"demo-prof","decision":"approve"}' ; echo
 	@echo "(In the browser this note is INJECTED into the connection modal. A human still clicks Connect.)"
 
 # Phase 2 — browserless Batch Outreach Queue: bulk ingest -> wait -> approve_all.
 demo-batch:
 	@echo "== POST /batch-ingest (3 profiles) =="
-	curl -s -X POST localhost:8080/batch-ingest -H 'Content-Type: application/json' -d '{"batch_id":"demo-batch","limit":3,"filters":"founder,sales","profiles":[{"profile_id":"demo-b1","name":"Ayesha Khan","headline":"Founder & CEO at Loom Textiles","company":"Loom","location":"Karachi","mutual":"6 mutual connections"},{"profile_id":"demo-b2","name":"Rohan Mehta","headline":"VP Sales | SaaS | B2B","company":"Cloudify","location":"Bangalore","mutual":""},{"profile_id":"demo-b3","name":"Daniel Park","headline":"Co-founder at Northwind Robotics","company":"Northwind","location":"Seoul","mutual":""}]}' ; echo
+	curl -s $(GW_AUTH) -X POST localhost:8080/batch-ingest -H 'Content-Type: application/json' -d '{"batch_id":"demo-batch","limit":3,"filters":"founder,sales","profiles":[{"profile_id":"demo-b1","name":"Ayesha Khan","headline":"Founder & CEO at Loom Textiles","company":"Loom","location":"Karachi","mutual":"6 mutual connections"},{"profile_id":"demo-b2","name":"Rohan Mehta","headline":"VP Sales | SaaS | B2B","company":"Cloudify","location":"Bangalore","mutual":""},{"profile_id":"demo-b3","name":"Daniel Park","headline":"Co-founder at Northwind Robotics","company":"Northwind","location":"Seoul","mutual":""}]}' ; echo
 	@echo "== waiting for all drafts (Ollama generation can take a while) =="
 	@for i in $$(seq 1 120); do \
-	  s=$$(curl -s localhost:8080/batch/demo-batch); \
+	  s=$$(curl -s $(GW_AUTH) localhost:8080/batch/demo-batch); \
 	  echo "$$s" | grep -q OUTREACH_GENERATING || { echo "$$s" | python3 -m json.tool; break; }; \
 	  sleep 3; \
 	done
 	@echo "== POST /batch-approve approve_all =="
-	curl -s -X POST localhost:8080/batch-approve -H 'Content-Type: application/json' \
+	curl -s $(GW_AUTH) -X POST localhost:8080/batch-approve -H 'Content-Type: application/json' \
 	  -d '{"batch_id":"demo-batch","decision":"approve_all"}' ; echo
 	@echo "(In the browser each approved note is INJECTED per-profile. A human still clicks Connect.)"

@@ -1301,3 +1301,10 @@ curl -X POST localhost:8080/approve-outreach -H 'Content-Type: application/json'
 3. **Append** to Decisions Log — never delete history.
 4. Add timestamps to milestones. Preserve previous decisions.
 5. Re-verify "Working" claims against the live stack before trusting them.
+
+---
+## 2026-11-17 — K70 popup: PR #6 merged in, WhatsApp/Instagram adapters (branch feature/k70-floating-copilot-v1-20261117)
+- Merged the VPS line (PR #6: bearer auth, Caddy, Hermes reply agent) into this branch. Gateway `/ingest` now takes `mode` (reply|compose), `tone`, `instructions` AND sets `owner`; Hermes accepts `tone` + `instructions` (Hinglish ok; a day/time the user states is treated as a true fact, and the "commits on the owner's behalf" rule is skipped only then).
+- New: `adapter_common.js`, `whatsapp.js`, `instagram.js` (read only the open chat on Capture; insert via execCommand on approval — see docs/adr/0001, needs owner sign-off + frozen-file digest update). Per-platform switches in Options (default OFF). Retention purge in gateway (`RETENTION_DAYS`, default 30).
+- Tests: `tests/extension-e2e/e2e.mjs` (real extension, synthetic sites, mock gateway), `bench/test_hermes_reply.py` (+tone/instruction cases), `gateway-go/retention_test.go`. ZIP: `python3 scripts/package_k70.py`.
+- NOT verified on real sites. Not published. The old `prepare_cws.py` legacy packager only knows the old file list.
