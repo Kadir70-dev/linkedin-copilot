@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LinkedIn Copilot settings</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 20px; max-width: 460px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input { width: 100%; box-sizing: border-box; padding: 6px; }
+    button { margin-top: 14px; padding: 6px 14px; }
+    #status { margin-top: 10px; }
+    .muted { color: #666; font-weight: 400; }
+  </style>
+</head>
+<body>
+  <p>Gateway: <code id="gateway"></code></p>
+  <label for="token">Access key <span class="muted">(from your administrator)</span></label>
+  <input id="token" type="password" autocomplete="off" spellcheck="false">
+  <button id="save">Save and test</button>
+  <div id="status"></div>
+  <p class="muted">The key is stored only in this browser profile. The extension drafts and fills
+    the LinkedIn box after you approve; you always press Send yourself.</p>
+  <script src="options.js"></script>
+</body>
+</html>
