@@ -18,9 +18,13 @@
         "https://www.linkedin.com/*"
       ],
       "js": [
+        "premium_panel.js",
         "content.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "css": [
+        "premium_panel.css"
+      ]
     }
   ],
   "icons": {
