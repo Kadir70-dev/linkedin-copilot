@@ -494,6 +494,14 @@ def retrieve_memory(state: dict) -> dict:
     return state
 
 
+REPLY_TONE_GUIDANCE = {
+    "professional": "Use a polished, respectful professional tone.",
+    "friendly": "Sound warm, approachable, and natural.",
+    "casual": "Use relaxed everyday language without being careless.",
+    "short": "Be direct and concise, ideally under 25 words.",
+}
+
+
 def generate_draft(state: dict) -> dict:
     prompt = (
         f"Conversation so far:\n{state['text']}\n\n"
@@ -501,8 +509,11 @@ def generate_draft(state: dict) -> dict:
         f"Notes about me: {state['memory']}\n\n"
         f"Draft my reply:"
     )
-    state["draft"] = ollama_generate(prompt, num_predict=150 if FAST_MODE else 0) \
-        or "Thanks for the message — happy to chat. When works for you?"
+    tone = REPLY_TONE_GUIDANCE.get(state.get("tone", ""), "")
+    system = SYSTEM + (" " + tone if tone else "")
+    state["draft"] = ollama_generate(
+        prompt, system=system, num_predict=150 if FAST_MODE else 0
+    ) or "Thanks for the message — happy to chat. When works for you?"
     return state
 
 
@@ -1529,16 +1540,42 @@ def process_outreach(profile_id: str, profile_text: str, target_name: str = "", 
     print(f"[ai-brain] profile={profile_id} style={out.get('style')} -> outreach.generated: {out['outreach'][:80]!r}", flush=True)
 
 
-def process(thread_id: str, text: str):
-    out = GRAPH.invoke({"thread_id": thread_id, "text": text})
-    draft = out["draft"]
+COMPOSE_SYSTEM = (
+    "You write a message for the user, based on the user's OWN writing "
+    "instructions. These instructions are not an incoming message to reply to. "
+    "Draft only the finished message, no preamble, no quotes and no explanation. "
+    "Use natural English unless the user specifies another language. "
+    "Do not invent meetings, credentials, promises, names or personal facts. "
+    "Never send or take any action."
+)
+
+
+def process(thread_id: str, text: str, mode: str = "reply",
+            tone: str = "", instructions: str = ""):
+    if mode == "compose":
+        tone_hint = REPLY_TONE_GUIDANCE.get(tone, "")
+        prompt = (
+            "My writing instructions:\n" + instructions + "\n\n" +
+            ("Optional context from my selected conversation:\n" + text + "\n\n"
+             if text else "") +
+            "Write the requested message now."
+        )
+        draft = ollama_generate(
+            prompt, system=COMPOSE_SYSTEM + (" " + tone_hint if tone_hint else ""),
+            num_predict=220 if FAST_MODE else 0,
+        )
+        # An unavailable model must not produce fake text for the user to insert.
+        draft = draft or ""
+    else:
+        out = GRAPH.invoke({"thread_id": thread_id, "text": text, "tone": tone})
+        draft = out["draft"]
     r.xadd(STREAM_RESULT, {
         "type": "draft.generated",
         "thread_id": thread_id,
         "draft_text": draft,
         "event_id": str(uuid.uuid4()),
     })
-    print(f"[ai-brain] thread={thread_id} -> draft.generated: {draft[:80]!r}", flush=True)
+    print(f"[ai-brain] thread={thread_id} mode={mode} -> draft.generated: {draft[:80]!r}", flush=True)
 
 
 def main():
@@ -1575,7 +1612,11 @@ def main():
             for msg_id, fields in messages:
                 try:
                     if fields.get("type") == "message.received":
-                        process(fields["thread_id"], fields.get("text", ""))
+                        process(
+                            fields["thread_id"], fields.get("text", ""),
+                            fields.get("mode", "reply"), fields.get("tone", ""),
+                            fields.get("instructions", ""),
+                        )
                     elif fields.get("type") == "outreach.requested":
                         if SEQUENTIAL:
                             print(f"[ai-brain] [seq] start profile={fields.get('profile_id')} "
