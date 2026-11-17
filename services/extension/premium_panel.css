@@ -1,0 +1,113 @@
+/* K70 Copilot v1: isolated from LinkedIn's changing UI. No external assets. */
+#k70-copilot, #k70-copilot * { box-sizing: border-box; }
+#k70-copilot {
+  position: fixed; right: 16px; bottom: 16px; z-index: 2147483646;
+  width: min(390px, calc(100vw - 24px)); max-width: calc(100vw - 16px);
+  color: #f3f3ff; font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  text-align: left; isolation: isolate;
+}
+#k70-copilot [hidden] { display: none !important; }
+#k70-copilot button, #k70-copilot textarea { font: inherit; letter-spacing: normal; }
+#k70-copilot button { cursor: pointer; }
+#k70-copilot button:disabled { opacity: .45; cursor: not-allowed; }
+#k70-copilot button:focus-visible, #k70-copilot textarea:focus-visible,
+#k70-copilot input:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+#k70-copilot .k70-shell {
+  overflow: hidden; width: 100%; max-height: min(740px, calc(100vh - 32px));
+  display: flex; flex-direction: column; border-radius: 18px;
+  border: 1px solid rgba(167, 139, 250, .48); background: #121426;
+  box-shadow: 0 25px 75px rgba(0,0,0,.56), 0 0 26px rgba(124,58,237,.18);
+}
+#k70-copilot .k70-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 13px 13px 12px 14px;
+  background: linear-gradient(115deg,#242047,#161629 75%);
+  border-bottom: 1px solid rgba(167,139,250,.2);
+  cursor: grab; touch-action: none; user-select: none;
+}
+#k70-copilot .k70-header:active { cursor: grabbing; }
+#k70-copilot .k70-heading { display: flex; gap: 10px; align-items: center; min-width: 0; }
+#k70-copilot .k70-heading strong { display: block; font-size: 15px; font-weight: 750; color: #fff; }
+#k70-copilot .k70-heading small { display: block; color: #b6afce; font-size: 10px; margin-top: 2px; }
+#k70-copilot .k70-brand-icon {
+  width: 33px; height: 33px; flex-shrink: 0; display: grid; place-items: center;
+  font-size: 24px; border-radius: 10px; color: white;
+  background: linear-gradient(145deg,#a855f7,#6242e4); box-shadow: 0 4px 16px #a855f766;
+}
+#k70-copilot .k70-window-actions { display: flex; gap: 5px; }
+#k70-copilot .k70-window-actions button {
+  display: grid; place-items: center; width: 27px; height: 27px;
+  border: 0; border-radius: 8px; background: #ffffff12; color: #d9d2ec;
+  font-size: 19px; font-weight: 400;
+}
+#k70-copilot .k70-window-actions button:hover { background: #ffffff24; color: #fff; }
+#k70-copilot .k70-body { overflow: auto; padding: 14px; overscroll-behavior: contain; }
+#k70-copilot .k70-tabs {
+  display: grid; grid-template-columns: 1fr 1fr; padding: 3px; gap: 3px;
+  border: 1px solid #33324b; border-radius: 11px; background: #1b1b31; margin-bottom: 14px;
+}
+#k70-copilot .k70-tabs button {
+  min-height: 36px; border: 0; background: transparent; color: #bcb5d4;
+  border-radius: 9px; font-size: 11px; font-weight: 650; padding: 6px 3px;
+}
+#k70-copilot .k70-tabs button.active {
+  color: white; background: linear-gradient(110deg,#8658f2,#a042e4);
+  box-shadow: 0 3px 10px #8b5cf655;
+}
+#k70-copilot .k70-pane { margin-bottom: 12px; }
+#k70-copilot label { display: block; font-size: 11px; font-weight: 700; color: #e8e5f5; margin-bottom: 7px; }
+#k70-copilot .k70-labelrow { display:flex; justify-content:space-between; gap:5px; align-items:center; }
+#k70-copilot .k70-textbutton {
+  border: 0; padding: 3px 4px; background: none; color: #baa4ff;
+  font-size: 10px; text-decoration: underline;
+}
+#k70-copilot textarea {
+  display:block; width: 100%; resize: vertical; min-height: 80px; max-height: 180px;
+  padding: 10px 11px; border-radius: 10px; border: 1px solid #41415b;
+  color: #f3f1ff; background: #202236; line-height: 1.5;
+}
+#k70-copilot textarea::placeholder { color: #a7a3bf; }
+#k70-copilot textarea:focus { border-color: #9c77f2; outline: none; }
+#k70-copilot .k70-hint { display:block; font-size:10px; margin-top:5px; color:#a6a3bd; }
+#k70-copilot .k70-checkbox {
+  display: flex; align-items: start; gap: 7px; font-size: 11px;
+  font-weight: 500; margin: 9px 0 0; color: #c6c2d9;
+}
+#k70-copilot .k70-checkbox input { accent-color: #9564f5; width: 14px; height: 14px; flex: 0 0 auto; margin: 2px 0 0; }
+#k70-copilot .k70-tone-heading { font-size:11px; font-weight:700; margin: 9px 0 7px; }
+#k70-copilot .k70-tones { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 4px; margin-bottom: 13px; }
+#k70-copilot .k70-tones button {
+  min-height: 30px; border-radius: 8px; border: 1px solid #3b3a56;
+  background: #222239; color: #c5c2d6; padding: 5px 3px; font-size: 10px;
+}
+#k70-copilot .k70-tones button.active { background: #5a3fb2; color: #fff; border-color: #9a80f2; }
+#k70-copilot .k70-primary {
+  border: 0; border-radius: 10px; color: white; background: linear-gradient(105deg,#7451ea,#a347ec);
+  font-weight: 750; min-height: 39px; padding: 8px 12px; box-shadow: 0 4px 15px #7e4bdf40;
+}
+#k70-copilot [data-action="generate"] { display:block; width:100%; }
+#k70-copilot .k70-primary:hover:not(:disabled) { filter: brightness(1.12); }
+#k70-copilot .k70-status { margin: 10px 0; min-height: 20px; color: #beaef1; font-size: 11px; }
+#k70-copilot .k70-result { border-top: 1px solid #33324a; padding-top: 12px; }
+#k70-copilot .k70-result textarea { min-height: 92px; }
+#k70-copilot .k70-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 9px; }
+#k70-copilot .k70-actions .k70-primary { flex: 2 1 130px; min-width: 130px; }
+#k70-copilot .k70-secondary {
+  min-height: 39px; padding: 7px 10px; border-radius: 9px; font-size: 11px;
+  color: #e5e1f9; background: #282940; border: 1px solid #454361; flex: 1;
+}
+#k70-copilot .k70-reject { color: #ffbdca; }
+#k70-copilot .k70-safety { color: #aaa8be; font-size: 10px; margin: 12px 0 0; }
+#k70-copilot .k70-launcher {
+  width: 52px; height: 52px; display: block; margin-left: auto;
+  border-radius: 18px; border: 1px solid #b9a1ff; color: #fff; font-size: 29px;
+  background: linear-gradient(130deg,#6241c9,#9c49ef);
+  box-shadow: 0 12px 35px #130c2499, 0 0 20px #7e56ea66;
+}
+@media(max-width: 480px) {
+  #k70-copilot { right: 8px; bottom: 8px; width: min(365px, calc(100vw - 16px)); }
+  #k70-copilot .k70-body { padding: 12px; }
+}
+@media(prefers-reduced-motion: reduce) {
+  #k70-copilot * { animation: none !important; transition: none !important; }
+}
