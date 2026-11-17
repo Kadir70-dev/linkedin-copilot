@@ -27,6 +27,8 @@ Open `chrome://extensions` (or `brave://extensions`), enable Developer mode, sel
 
 The extension calls the **local** gateway at `http://localhost:8080` through its service worker. There is NO secure public deployment / cloud authentication yet. Do not expose port 8080 to the public internet or deploy this local gateway as a public endpoint.
 
+The Compose profile in this feature branch binds Redis, Ollama and the gateway to **127.0.0.1 only**, so browser extension and API must run on the same computer (or a separately authenticated secure tunnel, which is not configured here). This intentionally does **not** turn the cloud website into the extension backend.
+
 ## Developer checks
 
 ```bash
