@@ -1,0 +1,59 @@
+name: K70 Floating Copilot Checks
+on:
+  pull_request:
+    paths:
+      - 'services/extension/**'
+      - 'services/gateway-go/**'
+      - 'services/ai-brain/**'
+      - '.github/workflows/k70-popup-checks.yml'
+  push:
+    branches:
+      - 'feature/k70-floating-copilot-v1-20261117'
+    paths:
+      - 'services/extension/**'
+      - 'services/gateway-go/**'
+      - 'services/ai-brain/**'
+      - '.github/workflows/k70-popup-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  extension-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JS syntax and manifest references
+        run: |
+          node --check services/extension/premium_panel.js
+          node --check services/extension/content.js
+          node --check services/extension/background.js
+          node -e "const fs=require('fs');const m=require('./services/extension/manifest.json');for(const c of m.content_scripts){for(const path of [...(c.js||[]),...(c.css||[])]){if(!fs.existsSync('services/extension/'+path))throw Error('missing '+path)}}"
+      - name: Forbidden send API guard (new premium panel)
+        run: |
+          node - <<'JS'
+          const fs = require('fs');
+          const s = fs.readFileSync('services/extension/premium_panel.js','utf8');
+          const forbidden = [/\.click\s*\(/, /\.submit\s*\(/, /requestSubmit\s*\(/,
+            /new\s+KeyboardEvent\s*\(/, /linkedin\.com\/voyager/i];
+          for(const pattern of forbidden) if(pattern.test(s)) throw Error('Forbidden API: '+pattern);
+          if(!s.includes('READY_FOR_INJECTION') || !s.includes('injectIntoComposer'))
+            throw Error('Missing approval gate / explicit injection');
+          JS
+
+  backend-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python worker syntax
+        run: python -m py_compile services/ai-brain/worker.py
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: services/gateway-go/go.sum
+      - name: Gateway build and tests
+        working-directory: services/gateway-go
+        run: go test ./...
