@@ -193,6 +193,15 @@
   }
 
   function panel() {
+    // The new K70 panel is an opt-in visual upgrade with the SAME local
+    // approval/injection boundary. Keep the legacy implementation as a
+    // fallback if the separate premium UI asset fails to load.
+    if (typeof globalThis.K70PremiumPanel === "function") {
+      globalThis.K70PremiumPanel({
+        call, threadId, captureThread, injectIntoComposer, observeHumanSend, toast,
+      });
+      return;
+    }
     const wrap = document.createElement("div");
     wrap.style.cssText =
       "position:fixed;right:16px;bottom:16px;width:320px;z-index:999999;background:#fff;" +
